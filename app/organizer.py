@@ -1,8 +1,10 @@
 import json
+import logging
 import os
 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+logger = logging.getLogger(__name__)
 
 
 def extract_json_object(raw: str) -> dict:
@@ -182,8 +184,8 @@ Saved notes:
         result["mode"] = "openai"
         return result
 
-    except Exception as e:
+    except Exception:
+        logger.exception("OpenAI analysis failed; using deterministic fallback")
         fallback = fallback_analyze(notes)
         fallback["mode"] = "fallback_after_api_error"
-        fallback["error"] = str(e)[:300]
         return fallback
