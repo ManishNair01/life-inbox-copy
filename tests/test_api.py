@@ -8,20 +8,22 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """Create an app client backed only by a per-test SQLite database."""
-    from app import database
-
     test_db_path = tmp_path / "life_inbox_test.db"
-    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
+    sys.modules.pop("app.database", None)
     sys.modules.pop("app.main", None)
     main = importlib.import_module("app.main")
+    database = importlib.import_module("app.database")
 
-    assert database.DB_PATH == test_db_path
+    assert database.engine.url.database == str(test_db_path)
     with TestClient(main.app) as test_client:
         yield test_client
 
+    database.engine.dispose()
     sys.modules.pop("app.main", None)
+    sys.modules.pop("app.database", None)
 
 
 def test_home_page_loads(client):
