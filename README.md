@@ -69,7 +69,17 @@ Then open:
 
 Stop the server by pressing `Control+C` in the terminal.
 
-## 5. Optional: add demonstration notes
+## 5. Run the automated tests
+
+From the top-level `life-inbox` folder, run:
+
+```bash
+python -m pytest
+```
+
+The tests use temporary SQLite databases and do not call OpenAI.
+
+## 6. Optional: add demonstration notes
 
 The original notebook included a utility that adds realistic sample notes.
 While the server is stopped, run:
@@ -96,7 +106,7 @@ life-inbox/
 │       └── styles.css
 ├── data/
 ├── scripts/seed_demo_notes.py
-├── tests/
+├── tests/test_api.py
 ├── reference/original_life_inbox_notebook.ipynb
 ├── .env.example
 ├── .gitignore
