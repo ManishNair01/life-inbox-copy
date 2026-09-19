@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Life Inbox</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>Life Inbox</h1>
+    <p class="sub">Capture first. Organize the whole inbox with AI when you are ready.</p>
+
+    <textarea id="noteText" placeholder="Example: Met Rohan yesterday. He recommended Atomic Habits. Need to order it this weekend. Also ask him about that Gurgaon restaurant."></textarea>
+    <br />
+    <button onclick="addNote()">Add Note</button>
+    <button class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
+
+    <h2>AI-organized inbox</h2>
+    <div id="aiOutput" class="panel">
+      <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”.</span>
+    </div>
+
+    <h2>Raw saved notes</h2>
+    <div id="notes"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
