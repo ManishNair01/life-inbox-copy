@@ -36,7 +36,40 @@ Install the dependencies:
 python -m pip install -r requirements.txt
 ```
 
-## 3. Optional: configure OpenAI
+## 3. Configure and migrate the database
+
+Life Inbox uses SQLite by default at `data/life_inbox.db`. To use another
+database location, set `DATABASE_URL` before running Alembic or the app:
+
+```bash
+export DATABASE_URL="sqlite:////absolute/path/to/life_inbox.db"
+```
+
+For a new or empty local database, apply all migrations with:
+
+```bash
+python -m alembic upgrade head
+```
+
+For an existing `data/life_inbox.db`, make a backup and then run the same
+upgrade:
+
+```bash
+cp data/life_inbox.db data/life_inbox.db.backup
+python -m alembic upgrade head
+```
+
+The initial migration detects the existing `notes` table, validates its
+required columns, and adopts it without deleting or copying any notes. Check
+the applied revision with:
+
+```bash
+python -m alembic current
+```
+
+The application does not run Alembic migrations automatically at startup.
+
+## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
 terminal before starting the application:
@@ -55,7 +88,7 @@ $env:OPENAI_MODEL="gpt-5-mini"
 
 Do not put the real key in source code or commit it to Git.
 
-## 4. Start Life Inbox
+## 5. Start Life Inbox
 
 From the top-level `life-inbox` folder, run:
 
@@ -69,7 +102,7 @@ Then open:
 
 Stop the server by pressing `Control+C` in the terminal.
 
-## 5. Run the automated tests
+## 6. Run the automated tests
 
 From the top-level `life-inbox` folder, run:
 
@@ -79,7 +112,7 @@ python -m pytest
 
 The tests use temporary SQLite databases and do not call OpenAI.
 
-## 6. Optional: add demonstration notes
+## 7. Optional: add demonstration notes
 
 The original notebook included a utility that adds realistic sample notes.
 While the server is stopped, run:
@@ -104,9 +137,15 @@ life-inbox/
 │   └── static/
 │       ├── app.js
 │       └── styles.css
+├── migrations/
+│   ├── env.py
+│   └── versions/0001_create_notes_table.py
+├── alembic.ini
 ├── data/
 ├── scripts/seed_demo_notes.py
-├── tests/test_api.py
+├── tests/
+│   ├── test_api.py
+│   └── test_migrations.py
 ├── reference/original_life_inbox_notebook.ipynb
 ├── .env.example
 ├── .gitignore
