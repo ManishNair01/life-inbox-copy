@@ -138,3 +138,80 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
         },
         "mode": "fallback_no_api_call",
     }
+
+
+def test_create_note_returns_friendly_error(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    def fail_to_save(_text):
+        raise RuntimeError("database password should not be exposed")
+
+    monkeypatch.setattr(main, "add_note_to_db", fail_to_save)
+
+    response = client.post("/api/notes", json={"text": "Keep this text"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to save note. Please try again."
+    }
+    assert "password" not in response.text
+
+
+def test_list_notes_returns_friendly_error(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    def fail_to_list():
+        raise RuntimeError("private database location")
+
+    monkeypatch.setattr(main, "list_notes_from_db", fail_to_list)
+
+    response = client.get("/api/notes")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to load notes. Please try again."
+    }
+    assert "private database" not in response.text
+
+
+def test_analyze_returns_friendly_error(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    def fail_to_analyze(_notes):
+        raise RuntimeError("OPENAI_API_KEY=super-secret")
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_to_analyze)
+
+    response = client.post("/api/analyze")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to analyze inbox. Please try again."
+    }
+    assert "super-secret" not in response.text
+
+
+def test_openai_failure_fallback_omits_technical_details(monkeypatch):
+    import openai
+
+    from app import organizer
+
+    def fail_client_creation():
+        raise RuntimeError("OPENAI_API_KEY=super-secret")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(openai, "OpenAI", fail_client_creation)
+
+    result = organizer.analyze_inbox_with_openai(
+        [
+            {
+                "id": 1,
+                "text": "Call the team tomorrow",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+
+    assert result["mode"] == "fallback_after_api_error"
+    assert "error" not in result
+    assert "super-secret" not in repr(result)
