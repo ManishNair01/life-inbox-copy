@@ -25,9 +25,13 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{database_path}")
     try:
         inspector = inspect(engine)
-        assert {"alembic_version", "inbox_items", "notes"} <= set(
-            inspector.get_table_names()
-        )
+        assert {
+            "alembic_version",
+            "analysis_runs",
+            "inbox_items",
+            "item_insights",
+            "notes",
+        } <= set(inspector.get_table_names())
         columns = {
             column["name"]: column
             for column in inspector.get_columns("inbox_items")
@@ -45,11 +49,33 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "updated_at",
         }
         assert columns["updated_at"]["nullable"] is True
+        assert {
+            column["name"]
+            for column in inspector.get_columns("analysis_runs")
+        } == {
+            "id",
+            "started_at",
+            "completed_at",
+            "status",
+            "mode",
+            "result_json",
+        }
+        assert {
+            column["name"]
+            for column in inspector.get_columns("item_insights")
+        } == {
+            "item_id",
+            "analysis_run_id",
+            "category",
+            "concise_title",
+            "priority",
+            "updated_at",
+        }
         with engine.connect() as connection:
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-        assert revision == "0003_create_inbox_items"
+        assert revision == "0004_persist_analysis_results"
     finally:
         engine.dispose()
 
@@ -149,6 +175,6 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0003_create_inbox_items"
+        assert revision == "0004_persist_analysis_results"
     finally:
         engine.dispose()

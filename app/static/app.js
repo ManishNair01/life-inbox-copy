@@ -227,6 +227,9 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
 
 function renderAnalysis(data) {
   const root = document.getElementById('aiOutput');
+  const generatedAt = data.generated_at
+    ? new Date(data.generated_at).toLocaleString()
+    : null;
 
   const bucketHtml = (data.buckets || []).map(bucket => `
     <div class="panel">
@@ -254,6 +257,8 @@ function renderAnalysis(data) {
   `).join('');
 
   root.innerHTML = `
+    ${generatedAt ? `<p class="muted"><strong>Generated:</strong> ${esc(generatedAt)}</p>` : ''}
+
     <h3>Buckets</h3>
     ${bucketHtml || '<p class="muted">No notes yet.</p>'}
 
@@ -265,6 +270,30 @@ function renderAnalysis(data) {
 
     <p class="muted">Mode: ${esc(data.mode || 'unknown')}</p>
   `;
+}
+
+async function loadLatestAnalysis() {
+  try {
+    const data = await fetchJson(
+      '/api/analyze/latest',
+      undefined,
+      'Unable to load saved analysis.'
+    );
+    if (!data) return;
+
+    renderAnalysis(data);
+    const generatedAt = new Date(data.generated_at).toLocaleString();
+    setStatus(
+      'analysisStatus',
+      `Showing saved analysis generated ${generatedAt}.`
+    );
+  } catch {
+    setStatus(
+      'analysisStatus',
+      'We could not load the saved analysis. You can try analyzing again.',
+      true
+    );
+  }
 }
 
 async function analyzeInbox() {
@@ -327,3 +356,4 @@ async function loadNotes(
 }
 
 loadNotes();
+loadLatestAnalysis();

@@ -2,6 +2,8 @@ import json
 import logging
 import os
 
+from app.schemas import AnalysisResult
+
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 logger = logging.getLogger(__name__)
@@ -103,17 +105,26 @@ def fallback_analyze(notes: list[dict]) -> dict:
     }
 
 
+def validate_analysis_result(result: dict, notes: list[dict]) -> dict:
+    validated = AnalysisResult.model_validate(result)
+    validated.validate_for_item_ids({note["id"] for note in notes})
+    return validated.model_dump()
+
+
 def analyze_inbox_with_openai(notes: list[dict]) -> dict:
     if not notes:
-        return {
-            "buckets": [],
-            "todos": [],
-            "priority_view": {"High": [], "Medium": [], "Low": []},
-            "mode": "empty_inbox",
-        }
+        return validate_analysis_result(
+            {
+                "buckets": [],
+                "todos": [],
+                "priority_view": {"High": [], "Medium": [], "Low": []},
+                "mode": "empty_inbox",
+            },
+            notes,
+        )
 
     if not os.getenv("OPENAI_API_KEY"):
-        return fallback_analyze(notes)
+        return validate_analysis_result(fallback_analyze(notes), notes)
 
     try:
         from openai import OpenAI
@@ -182,10 +193,10 @@ Saved notes:
         response = client.responses.create(model=MODEL, input=prompt)
         result = extract_json_object(response.output_text)
         result["mode"] = "openai"
-        return result
+        return validate_analysis_result(result, notes)
 
     except Exception:
         logger.exception("OpenAI analysis failed; using deterministic fallback")
         fallback = fallback_analyze(notes)
         fallback["mode"] = "fallback_after_api_error"
-        return fallback
+        return validate_analysis_result(fallback, notes)
