@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
 
-class NoteCreate(BaseModel):
+class NoteText(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
     @field_validator("text")
@@ -10,6 +10,14 @@ class NoteCreate(BaseModel):
         if not value.strip():
             raise ValueError("Note text must contain non-whitespace characters")
         return value
+
+
+class NoteCreate(NoteText):
+    pass
+
+
+class NoteUpdate(NoteText):
+    pass
 
 
 class Note(BaseModel):

@@ -1,5 +1,6 @@
 let isSavingNote = false;
 let isAnalyzingInbox = false;
+const pendingNoteActions = new Set();
 
 function setStatus(elementId, message, isError = false) {
   const element = document.getElementById(elementId);
@@ -24,6 +25,10 @@ async function fetchJson(url, options, friendlyError) {
 
   if (!response.ok) {
     throw new Error(friendlyError);
+  }
+
+  if (response.status === 204) {
+    return null;
   }
 
   try {
@@ -82,6 +87,142 @@ function esc(str) {
   return String(str ?? '').replace(/[&<>'"]/g, tag => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
   }[tag]));
+}
+
+function actionButton(label, className, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.className = className;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderNote(note) {
+  const root = document.createElement('div');
+  root.className = 'note';
+  root.dataset.noteId = String(note.id);
+
+  const text = document.createElement('div');
+  text.className = 'note-text';
+  text.textContent = note.text;
+
+  const time = document.createElement('div');
+  time.className = 'time';
+  time.textContent = `#${note.id} · ${note.created_at}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+
+  const editButton = actionButton('Edit', 'secondary', () => {
+    showEditNote(note, root);
+  });
+  const deleteButton = actionButton('Delete', 'danger', () => {
+    deleteExistingNote(note, root, editButton, deleteButton);
+  });
+
+  actions.append(editButton, deleteButton);
+  root.append(text, time, actions);
+  return root;
+}
+
+function showEditNote(note, root) {
+  if (pendingNoteActions.has(note.id)) return;
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'note-edit-input';
+  textarea.maxLength = 2000;
+  textarea.value = note.text;
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+
+  const saveButton = actionButton('Save', '', async () => {
+    const text = textarea.value.trim();
+    if (!text) {
+      setStatus('noteStatus', 'Edited note text cannot be empty.', true);
+      textarea.focus();
+      return;
+    }
+    if (pendingNoteActions.has(note.id)) return;
+
+    pendingNoteActions.add(note.id);
+    saveButton.disabled = true;
+    cancelButton.disabled = true;
+    saveButton.textContent = 'Saving…';
+    setStatus('noteStatus', 'Saving your changes…');
+
+    try {
+      const updatedNote = await fetchJson(
+        `/api/notes/${note.id}`,
+        {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({text})
+        },
+        'Unable to update note.'
+      );
+      root.replaceWith(renderNote(updatedNote));
+      setStatus('noteStatus', 'Note updated.');
+    } catch {
+      setStatus(
+        'noteStatus',
+        'We could not update this note. Your changes are still here—please try again.',
+        true
+      );
+      saveButton.disabled = false;
+      cancelButton.disabled = false;
+      saveButton.textContent = 'Save';
+    } finally {
+      pendingNoteActions.delete(note.id);
+    }
+  });
+
+  const cancelButton = actionButton('Cancel', 'secondary', () => {
+    if (pendingNoteActions.has(note.id)) return;
+    root.replaceWith(renderNote(note));
+    setStatus('noteStatus', 'Edit cancelled.');
+  });
+
+  actions.append(saveButton, cancelButton);
+  root.replaceChildren(textarea, actions);
+  textarea.focus();
+}
+
+async function deleteExistingNote(note, root, editButton, deleteButton) {
+  if (pendingNoteActions.has(note.id)) return;
+
+  const confirmed = window.confirm(
+    'Delete this note? This action cannot be undone.'
+  );
+  if (!confirmed) return;
+
+  pendingNoteActions.add(note.id);
+  editButton.disabled = true;
+  deleteButton.disabled = true;
+  deleteButton.textContent = 'Deleting…';
+  setStatus('noteStatus', 'Deleting note…');
+
+  try {
+    await fetchJson(
+      `/api/notes/${note.id}`,
+      {method: 'DELETE'},
+      'Unable to delete note.'
+    );
+    root.remove();
+    setStatus('noteStatus', 'Note deleted.');
+  } catch {
+    setStatus(
+      'noteStatus',
+      'We could not delete this note. It is still here—please try again.',
+      true
+    );
+    editButton.disabled = false;
+    deleteButton.disabled = false;
+    deleteButton.textContent = 'Delete';
+  } finally {
+    pendingNoteActions.delete(note.id);
+  }
 }
 
 function renderAnalysis(data) {
@@ -176,10 +317,7 @@ async function loadNotes(
     root.innerHTML = '';
 
     for (const note of notes) {
-      const div = document.createElement('div');
-      div.className = 'note';
-      div.innerHTML = `<div>${esc(note.text)}</div><div class="time">#${note.id} · ${esc(note.created_at)}</div>`;
-      root.appendChild(div);
+      root.appendChild(renderNote(note));
     }
     return true;
   } catch {

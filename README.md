@@ -4,7 +4,7 @@ This is the local-project version of the Life Inbox Google Colab notebook.
 It preserves the features already present in the notebook:
 
 - save a text note;
-- list saved notes;
+- list, edit, and delete saved notes;
 - organize the entire inbox into buckets, priorities, and ToDos;
 - use the OpenAI API when an API key is available;
 - use the notebook's deterministic fallback organizer otherwise.
@@ -139,7 +139,9 @@ life-inbox/
 │       └── styles.css
 ├── migrations/
 │   ├── env.py
-│   └── versions/0001_create_notes_table.py
+│   └── versions/
+│       ├── 0001_create_notes_table.py
+│       └── 0002_add_updated_at_to_notes.py
 ├── alembic.ini
 ├── data/
 ├── scripts/seed_demo_notes.py

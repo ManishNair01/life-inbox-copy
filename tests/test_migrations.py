@@ -28,11 +28,17 @@ def test_upgrade_creates_notes_table_in_empty_database(tmp_path, monkeypatch):
         assert {"alembic_version", "notes"} <= set(
             inspector.get_table_names()
         )
+        columns = {
+            column["name"]: column
+            for column in inspector.get_columns("notes")
+        }
+        assert "updated_at" in columns
+        assert columns["updated_at"]["nullable"] is True
         with engine.connect() as connection:
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-        assert revision == "0001_create_notes_table"
+        assert revision == "0002_add_updated_at_to_notes"
     finally:
         engine.dispose()
 
@@ -76,7 +82,11 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
+            updated_values = connection.execute(
+                text("SELECT updated_at FROM notes ORDER BY id")
+            ).scalars().all()
         assert [tuple(note) for note in migrated_notes] == existing_notes
-        assert revision == "0001_create_notes_table"
+        assert updated_values == [None, None]
+        assert revision == "0002_add_updated_at_to_notes"
     finally:
         engine.dispose()
