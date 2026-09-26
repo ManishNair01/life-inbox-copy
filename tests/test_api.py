@@ -82,6 +82,77 @@ def test_list_saved_notes(client):
     ]
 
 
+def test_update_note(client):
+    created = client.post(
+        "/api/notes", json={"text": "Original note"}
+    ).json()
+
+    response = client.put(
+        f"/api/notes/{created['id']}",
+        json={"text": "Updated note"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": created["id"],
+        "text": "Updated note",
+        "created_at": created["created_at"],
+    }
+    assert client.get("/api/notes").json() == [response.json()]
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        stored_note = session.get(database.NoteRecord, created["id"])
+        assert stored_note.updated_at is not None
+
+
+@pytest.mark.parametrize("text", ["", "   \t\n", "x" * 2001])
+def test_update_note_rejects_invalid_text(client, text):
+    created = client.post(
+        "/api/notes", json={"text": "Keep this note"}
+    ).json()
+
+    response = client.put(
+        f"/api/notes/{created['id']}",
+        json={"text": text},
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/notes").json() == [created]
+
+
+def test_update_nonexistent_note_returns_404(client):
+    response = client.put(
+        "/api/notes/999",
+        json={"text": "Updated note"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Note not found."}
+
+
+def test_delete_only_requested_note(client):
+    first = client.post(
+        "/api/notes", json={"text": "Delete this note"}
+    ).json()
+    second = client.post(
+        "/api/notes", json={"text": "Keep this note"}
+    ).json()
+
+    response = client.delete(f"/api/notes/{first['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert client.get("/api/notes").json() == [second]
+
+
+def test_delete_nonexistent_note_returns_404(client):
+    response = client.delete("/api/notes/999")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Note not found."}
+
+
 @pytest.mark.parametrize("text", ["", "   \t\n", "x" * 2001])
 def test_invalid_note_text_is_rejected(client, text):
     response = client.post("/api/notes", json={"text": text})
@@ -170,6 +241,43 @@ def test_list_notes_returns_friendly_error(client, monkeypatch):
     assert response.status_code == 500
     assert response.json() == {
         "detail": "Unable to load notes. Please try again."
+    }
+    assert "private database" not in response.text
+
+
+def test_update_note_returns_friendly_error(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    def fail_to_update(_note_id, _text):
+        raise RuntimeError("private database location")
+
+    monkeypatch.setattr(main, "update_note_in_db", fail_to_update)
+
+    response = client.put(
+        "/api/notes/1",
+        json={"text": "Updated note"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to update note. Please try again."
+    }
+    assert "private database" not in response.text
+
+
+def test_delete_note_returns_friendly_error(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    def fail_to_delete(_note_id):
+        raise RuntimeError("private database location")
+
+    monkeypatch.setattr(main, "delete_note_from_db", fail_to_delete)
+
+    response = client.delete("/api/notes/1")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to delete note. Please try again."
     }
     assert "private database" not in response.text
 

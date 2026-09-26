@@ -2,13 +2,19 @@ import logging
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.database import add_note_to_db, init_db, list_notes_from_db
+from app.database import (
+    add_note_to_db,
+    delete_note_from_db,
+    init_db,
+    list_notes_from_db,
+    update_note_in_db,
+)
 from app.organizer import analyze_inbox_with_openai
-from app.schemas import Note, NoteCreate
+from app.schemas import Note, NoteCreate, NoteUpdate
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -47,6 +53,42 @@ def get_notes():
             status_code=500,
             detail="Unable to load notes. Please try again.",
         ) from exc
+
+
+@app.put("/api/notes/{note_id}", response_model=Note)
+def update_note(note_id: int, payload: NoteUpdate):
+    try:
+        note = update_note_in_db(note_id, payload.text)
+    except Exception as exc:
+        logger.exception("Failed to update note")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update note. Please try again.",
+        ) from exc
+
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found.")
+    return note
+
+
+@app.delete(
+    "/api/notes/{note_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_note(note_id: int):
+    try:
+        deleted = delete_note_from_db(note_id)
+    except Exception as exc:
+        logger.exception("Failed to delete note")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to delete note. Please try again.",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Note not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/api/analyze")
