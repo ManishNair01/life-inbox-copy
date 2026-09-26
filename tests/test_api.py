@@ -57,6 +57,123 @@ def test_health_check(client):
     assert response.json() == {"status": "ok"}
 
 
+def test_create_and_list_canonical_text_item(client):
+    response = client.post(
+        "/api/items",
+        json={"raw_text": "Canonical text item"},
+    )
+
+    assert response.status_code == 200
+    item = response.json()
+    assert item == {
+        "id": 1,
+        "item_type": "text",
+        "title": None,
+        "raw_text": "Canonical text item",
+        "source_url": None,
+        "original_filename": None,
+        "mime_type": None,
+        "processing_status": "ready",
+        "created_at": item["created_at"],
+        "updated_at": None,
+    }
+    assert client.get("/api/items").json() == [item]
+
+
+def test_update_canonical_text_item(client):
+    created = client.post(
+        "/api/items",
+        json={"raw_text": "Original item"},
+    ).json()
+
+    response = client.put(
+        f"/api/items/{created['id']}",
+        json={"raw_text": "Updated item"},
+    )
+
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["id"] == created["id"]
+    assert updated["raw_text"] == "Updated item"
+    assert updated["created_at"] == created["created_at"]
+    assert updated["updated_at"] is not None
+    assert client.get("/api/notes").json() == [
+        {
+            "id": created["id"],
+            "text": "Updated item",
+            "created_at": created["created_at"],
+        }
+    ]
+
+
+@pytest.mark.parametrize("raw_text", ["", "   \t\n", "x" * 2001])
+def test_canonical_item_rejects_invalid_text(client, raw_text):
+    response = client.post(
+        "/api/items",
+        json={"raw_text": raw_text},
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/items").json() == []
+
+
+@pytest.mark.parametrize("raw_text", ["", "   \t\n", "x" * 2001])
+def test_canonical_item_update_rejects_invalid_text(client, raw_text):
+    created = client.post(
+        "/api/items",
+        json={"raw_text": "Keep this item"},
+    ).json()
+
+    response = client.put(
+        f"/api/items/{created['id']}",
+        json={"raw_text": raw_text},
+    )
+
+    assert response.status_code == 422
+    assert client.get("/api/items").json() == [created]
+
+
+def test_canonical_item_missing_ids_return_404(client):
+    update_response = client.put(
+        "/api/items/999",
+        json={"raw_text": "Updated item"},
+    )
+    delete_response = client.delete("/api/items/999")
+
+    assert update_response.status_code == 404
+    assert update_response.json() == {"detail": "Item not found."}
+    assert delete_response.status_code == 404
+    assert delete_response.json() == {"detail": "Item not found."}
+
+
+def test_delete_canonical_item_affects_only_requested_item(client):
+    first = client.post(
+        "/api/items", json={"raw_text": "Delete this item"}
+    ).json()
+    second = client.post(
+        "/api/items", json={"raw_text": "Keep this item"}
+    ).json()
+
+    response = client.delete(f"/api/items/{first['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert client.get("/api/items").json() == [second]
+
+
+def test_notes_api_uses_canonical_item_storage(client):
+    note = client.post(
+        "/api/notes", json={"text": "Compatibility note"}
+    ).json()
+
+    items = client.get("/api/items").json()
+
+    assert len(items) == 1
+    assert items[0]["id"] == note["id"]
+    assert items[0]["item_type"] == "text"
+    assert items[0]["raw_text"] == note["text"]
+
+
 def test_create_note(client):
     response = client.post("/api/notes", json={"text": "Buy milk tomorrow"})
 
@@ -102,8 +219,8 @@ def test_update_note(client):
 
     database = sys.modules["app.database"]
     with database.SessionLocal() as session:
-        stored_note = session.get(database.NoteRecord, created["id"])
-        assert stored_note.updated_at is not None
+        stored_item = session.get(database.InboxItemRecord, created["id"])
+        assert stored_item.updated_at is not None
 
 
 @pytest.mark.parametrize("text", ["", "   \t\n", "x" * 2001])

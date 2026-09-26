@@ -55,11 +55,11 @@ async function addNote() {
 
   try {
     await fetchJson(
-      '/api/notes',
+      '/api/items',
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text})
+        body: JSON.stringify({raw_text: text})
       },
       'Unable to save note.'
     );
@@ -105,7 +105,7 @@ function renderNote(note) {
 
   const text = document.createElement('div');
   text.className = 'note-text';
-  text.textContent = note.text;
+  text.textContent = note.raw_text;
 
   const time = document.createElement('div');
   time.className = 'time';
@@ -132,7 +132,7 @@ function showEditNote(note, root) {
   const textarea = document.createElement('textarea');
   textarea.className = 'note-edit-input';
   textarea.maxLength = 2000;
-  textarea.value = note.text;
+  textarea.value = note.raw_text;
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
@@ -154,11 +154,11 @@ function showEditNote(note, root) {
 
     try {
       const updatedNote = await fetchJson(
-        `/api/notes/${note.id}`,
+        `/api/items/${note.id}`,
         {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({text})
+          body: JSON.stringify({raw_text: text})
         },
         'Unable to update note.'
       );
@@ -205,7 +205,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
 
   try {
     await fetchJson(
-      `/api/notes/${note.id}`,
+      `/api/items/${note.id}`,
       {method: 'DELETE'},
       'Unable to delete note.'
     );
@@ -309,14 +309,14 @@ async function loadNotes(
 ) {
   try {
     const notes = await fetchJson(
-      '/api/notes',
+      '/api/items',
       undefined,
       'Unable to load notes.'
     );
     const root = document.getElementById('notes');
     root.innerHTML = '';
 
-    for (const note of notes) {
+    for (const note of notes.filter(item => item.item_type === 'text')) {
       root.appendChild(renderNote(note));
     }
     return true;

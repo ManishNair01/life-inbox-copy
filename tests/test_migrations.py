@@ -16,7 +16,7 @@ def alembic_config(database_path: Path) -> Config:
     return config
 
 
-def test_upgrade_creates_notes_table_in_empty_database(tmp_path, monkeypatch):
+def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     database_path = tmp_path / "empty.db"
 
@@ -25,20 +25,31 @@ def test_upgrade_creates_notes_table_in_empty_database(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{database_path}")
     try:
         inspector = inspect(engine)
-        assert {"alembic_version", "notes"} <= set(
+        assert {"alembic_version", "inbox_items", "notes"} <= set(
             inspector.get_table_names()
         )
         columns = {
             column["name"]: column
-            for column in inspector.get_columns("notes")
+            for column in inspector.get_columns("inbox_items")
         }
-        assert "updated_at" in columns
+        assert set(columns) == {
+            "id",
+            "item_type",
+            "title",
+            "raw_text",
+            "source_url",
+            "original_filename",
+            "mime_type",
+            "processing_status",
+            "created_at",
+            "updated_at",
+        }
         assert columns["updated_at"]["nullable"] is True
         with engine.connect() as connection:
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-        assert revision == "0002_add_updated_at_to_notes"
+        assert revision == "0003_create_inbox_items"
     finally:
         engine.dispose()
 
@@ -73,6 +84,9 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
 
     engine = create_engine(f"sqlite:///{database_path}")
     try:
+        assert {"inbox_items", "notes"} <= set(
+            inspect(engine).get_table_names()
+        )
         with engine.connect() as connection:
             migrated_notes = connection.execute(
                 text(
@@ -85,8 +99,56 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             updated_values = connection.execute(
                 text("SELECT updated_at FROM notes ORDER BY id")
             ).scalars().all()
+            migrated_items = connection.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        item_type,
+                        title,
+                        raw_text,
+                        source_url,
+                        original_filename,
+                        mime_type,
+                        processing_status,
+                        created_at,
+                        updated_at
+                    FROM inbox_items
+                    ORDER BY id
+                    """
+                )
+            ).all()
+            next_id = connection.execute(
+                text(
+                    """
+                    INSERT INTO inbox_items (
+                        item_type,
+                        raw_text,
+                        processing_status,
+                        created_at
+                    )
+                    VALUES ('text', 'New item', 'ready', '2026-01-03')
+                    """
+                )
+            ).lastrowid
         assert [tuple(note) for note in migrated_notes] == existing_notes
         assert updated_values == [None, None]
-        assert revision == "0002_add_updated_at_to_notes"
+        assert [tuple(item) for item in migrated_items] == [
+            (
+                note_id,
+                "text",
+                None,
+                note_text,
+                None,
+                None,
+                None,
+                "ready",
+                created_at,
+                None,
+            )
+            for note_id, note_text, created_at in existing_notes
+        ]
+        assert next_id == 10
+        assert revision == "0003_create_inbox_items"
     finally:
         engine.dispose()

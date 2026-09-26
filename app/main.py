@@ -7,14 +7,25 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.database import (
+    add_item_to_db,
     add_note_to_db,
+    delete_item_from_db,
     delete_note_from_db,
     init_db,
+    list_items_from_db,
     list_notes_from_db,
+    update_item_in_db,
     update_note_in_db,
 )
 from app.organizer import analyze_inbox_with_openai
-from app.schemas import Note, NoteCreate, NoteUpdate
+from app.schemas import (
+    InboxItem,
+    InboxItemCreate,
+    InboxItemUpdate,
+    Note,
+    NoteCreate,
+    NoteUpdate,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -31,7 +42,67 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/api/notes", response_model=Note)
+@app.post("/api/items", response_model=InboxItem)
+def create_item(payload: InboxItemCreate):
+    try:
+        return add_item_to_db(payload.raw_text)
+    except Exception as exc:
+        logger.exception("Failed to save inbox item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save item. Please try again.",
+        ) from exc
+
+
+@app.get("/api/items", response_model=List[InboxItem])
+def get_items():
+    try:
+        return list_items_from_db()
+    except Exception as exc:
+        logger.exception("Failed to load inbox items")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load items. Please try again.",
+        ) from exc
+
+
+@app.put("/api/items/{item_id}", response_model=InboxItem)
+def update_item(item_id: int, payload: InboxItemUpdate):
+    try:
+        item = update_item_in_db(item_id, payload.raw_text)
+    except Exception as exc:
+        logger.exception("Failed to update inbox item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update item. Please try again.",
+        ) from exc
+
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return item
+
+
+@app.delete(
+    "/api/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_item(item_id: int):
+    try:
+        deleted = delete_item_from_db(item_id)
+    except Exception as exc:
+        logger.exception("Failed to delete inbox item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to delete item. Please try again.",
+        ) from exc
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/api/notes", response_model=Note, deprecated=True)
 def create_note(payload: NoteCreate):
     try:
         return add_note_to_db(payload.text)
@@ -43,7 +114,7 @@ def create_note(payload: NoteCreate):
         ) from exc
 
 
-@app.get("/api/notes", response_model=List[Note])
+@app.get("/api/notes", response_model=List[Note], deprecated=True)
 def get_notes():
     try:
         return list_notes_from_db()
@@ -55,7 +126,7 @@ def get_notes():
         ) from exc
 
 
-@app.put("/api/notes/{note_id}", response_model=Note)
+@app.put("/api/notes/{note_id}", response_model=Note, deprecated=True)
 def update_note(note_id: int, payload: NoteUpdate):
     try:
         note = update_note_in_db(note_id, payload.text)
@@ -75,6 +146,7 @@ def update_note(note_id: int, payload: NoteUpdate):
     "/api/notes/{note_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
+    deprecated=True,
 )
 def delete_note(note_id: int):
     try:
