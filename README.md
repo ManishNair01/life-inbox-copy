@@ -88,6 +88,17 @@ legacy notes into `inbox_items` with the same IDs and timestamps. The legacy
 `notes` table is retained unchanged as a migration safety copy and is no
 longer authoritative.
 
+### Persisted analysis
+
+`POST /api/analyze` still organizes the complete inbox. Successful validated
+results are stored in `analysis_runs`, and each text item's latest category,
+concise title, and priority are stored in `item_insights`.
+
+`GET /api/analyze/latest` returns the latest successful result without calling
+OpenAI. The browser uses it on page load and displays when the result was
+generated. Failed runs are recorded separately and never replace the previous
+successful result or its item insights.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
@@ -161,7 +172,8 @@ life-inbox/
 │   └── versions/
 │       ├── 0001_create_notes_table.py
 │       ├── 0002_add_updated_at_to_notes.py
-│       └── 0003_create_inbox_items.py
+│       ├── 0003_create_inbox_items.py
+│       └── 0004_persist_analysis_results.py
 ├── alembic.ini
 ├── data/
 ├── scripts/seed_demo_notes.py

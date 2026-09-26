@@ -9,15 +9,19 @@ from fastapi.staticfiles import StaticFiles
 from app.database import (
     add_item_to_db,
     add_note_to_db,
+    complete_analysis_run,
     delete_item_from_db,
     delete_note_from_db,
+    fail_analysis_run,
+    get_latest_successful_analysis,
     init_db,
     list_items_from_db,
     list_notes_from_db,
+    start_analysis_run,
     update_item_in_db,
     update_note_in_db,
 )
-from app.organizer import analyze_inbox_with_openai
+from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.schemas import (
     InboxItem,
     InboxItemCreate,
@@ -25,6 +29,7 @@ from app.schemas import (
     Note,
     NoteCreate,
     NoteUpdate,
+    PersistedAnalysis,
 )
 
 
@@ -163,12 +168,40 @@ def delete_note(note_id: int):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.post("/api/analyze")
-def analyze_inbox():
+@app.get(
+    "/api/analyze/latest",
+    response_model=PersistedAnalysis,
+)
+def get_latest_analysis():
     try:
-        notes = list_notes_from_db()
-        return analyze_inbox_with_openai(notes)
+        result = get_latest_successful_analysis()
     except Exception as exc:
+        logger.exception("Failed to load latest analysis")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load the latest analysis. Please try again.",
+        ) from exc
+
+    if result is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return result
+
+
+@app.post("/api/analyze", response_model=PersistedAnalysis)
+def analyze_inbox():
+    run_id = None
+    try:
+        run_id = start_analysis_run()
+        notes = list_notes_from_db()
+        raw_result = analyze_inbox_with_openai(notes)
+        result = validate_analysis_result(raw_result, notes)
+        return complete_analysis_run(run_id, result)
+    except Exception as exc:
+        if run_id is not None:
+            try:
+                fail_analysis_run(run_id)
+            except Exception:
+                logger.exception("Failed to mark analysis run as failed")
         logger.exception("Failed to analyze inbox")
         raise HTTPException(
             status_code=500,

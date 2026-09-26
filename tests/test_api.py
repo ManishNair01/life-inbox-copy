@@ -1,8 +1,18 @@
 import importlib
+import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def analysis_without_metadata(data):
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in {"analysis_run_id", "generated_at"}
+    }
 
 
 @pytest.fixture()
@@ -278,16 +288,27 @@ def test_invalid_note_text_is_rejected(client, text):
     assert client.get("/api/notes").json() == []
 
 
+def test_latest_analysis_is_empty_before_first_success(client):
+    response = client.get("/api/analyze/latest")
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+
 def test_analyze_empty_inbox(client):
     response = client.post("/api/analyze")
 
     assert response.status_code == 200
-    assert response.json() == {
+    data = response.json()
+    assert data["analysis_run_id"] == 1
+    assert data["generated_at"]
+    assert analysis_without_metadata(data) == {
         "buckets": [],
         "todos": [],
         "priority_view": {"High": [], "Medium": [], "Low": []},
         "mode": "empty_inbox",
     }
+    assert client.get("/api/analyze/latest").json() == data
 
 
 def test_analyze_uses_deterministic_fallback_without_openai_key(client):
@@ -298,7 +319,10 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
 
     assert create_response.status_code == 200
     assert response.status_code == 200
-    assert response.json() == {
+    data = response.json()
+    assert data["analysis_run_id"] == 1
+    assert data["generated_at"]
+    assert analysis_without_metadata(data) == {
         "buckets": [
             {
                 "name": "Work",
@@ -326,6 +350,98 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
         },
         "mode": "fallback_no_api_call",
     }
+
+
+def test_successful_analysis_persists_run_and_item_insight(client):
+    created = client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    ).json()
+
+    analysis = client.post("/api/analyze").json()
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        run = session.get(
+            database.AnalysisRunRecord,
+            analysis["analysis_run_id"],
+        )
+        insight = session.get(
+            database.ItemInsightRecord,
+            created["id"],
+        )
+        assert run.status == "succeeded"
+        assert run.mode == "fallback_no_api_call"
+        assert run.started_at
+        assert run.completed_at == analysis["generated_at"]
+        assert json.loads(run.result_json) == analysis_without_metadata(
+            analysis
+        )
+        assert insight.analysis_run_id == run.id
+        assert insight.category == "Work"
+        assert insight.concise_title == "Call the team tomorrow"
+        assert insight.priority == "High"
+
+
+def test_failed_analysis_keeps_previous_success(client, monkeypatch):
+    client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    )
+    previous = client.post("/api/analyze").json()
+    main = sys.modules["app.main"]
+
+    def fail_analysis(_notes):
+        raise RuntimeError("simulated provider failure")
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_analysis)
+
+    failed_response = client.post("/api/analyze")
+
+    assert failed_response.status_code == 500
+    assert client.get("/api/analyze/latest").json() == previous
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        runs = session.query(database.AnalysisRunRecord).order_by(
+            database.AnalysisRunRecord.id
+        ).all()
+        insight = session.get(database.ItemInsightRecord, 1)
+        assert [run.status for run in runs] == ["succeeded", "failed"]
+        assert runs[1].mode == "error"
+        assert runs[1].result_json is None
+        assert insight.analysis_run_id == runs[0].id
+
+
+def test_invalid_analysis_result_is_not_saved(client, monkeypatch):
+    client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    )
+    main = sys.modules["app.main"]
+
+    monkeypatch.setattr(
+        main,
+        "analyze_inbox_with_openai",
+        lambda _notes: {
+            "buckets": [],
+            "todos": [],
+            "priority_view": {"High": [], "Medium": [], "Low": []},
+            "mode": "openai",
+        },
+    )
+
+    response = client.post("/api/analyze")
+
+    assert response.status_code == 500
+    assert client.get("/api/analyze/latest").status_code == 204
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        run = session.get(database.AnalysisRunRecord, 1)
+        assert run.status == "failed"
+        assert run.result_json is None
+        assert session.query(database.ItemInsightRecord).count() == 0
 
 
 def test_create_note_returns_friendly_error(client, monkeypatch):
@@ -414,6 +530,95 @@ def test_analyze_returns_friendly_error(client, monkeypatch):
         "detail": "Unable to analyze inbox. Please try again."
     }
     assert "super-secret" not in response.text
+
+
+def test_valid_mocked_openai_output_is_validated(monkeypatch):
+    import openai
+
+    from app import organizer
+
+    model_output = {
+        "buckets": [
+            {
+                "name": "Work",
+                "notes": [
+                    {
+                        "id": 1,
+                        "title": "Send summary",
+                        "priority": "Medium",
+                    }
+                ],
+            }
+        ],
+        "todos": [
+            {
+                "task": "Send the meeting summary",
+                "priority": "Medium",
+                "source_note_ids": [1],
+                "when": None,
+            }
+        ],
+        "priority_view": {
+            "High": [],
+            "Medium": [{"id": 1, "title": "Send summary"}],
+            "Low": [],
+        },
+    }
+    fake_responses = SimpleNamespace(
+        create=lambda **_kwargs: SimpleNamespace(
+            output_text=json.dumps(model_output)
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(
+        openai,
+        "OpenAI",
+        lambda: SimpleNamespace(responses=fake_responses),
+    )
+
+    result = organizer.analyze_inbox_with_openai(
+        [
+            {
+                "id": 1,
+                "text": "Send the meeting summary",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+
+    assert result["mode"] == "openai"
+    assert result["buckets"][0]["notes"][0]["priority"] == "Medium"
+
+
+def test_malformed_mocked_openai_output_uses_fallback(monkeypatch):
+    import openai
+
+    from app import organizer
+
+    fake_responses = SimpleNamespace(
+        create=lambda **_kwargs: SimpleNamespace(
+            output_text="not valid JSON"
+        )
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(
+        openai,
+        "OpenAI",
+        lambda: SimpleNamespace(responses=fake_responses),
+    )
+
+    result = organizer.analyze_inbox_with_openai(
+        [
+            {
+                "id": 1,
+                "text": "Call the team tomorrow",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+
+    assert result["mode"] == "fallback_after_api_error"
+    assert result["buckets"][0]["notes"][0]["id"] == 1
 
 
 def test_openai_failure_fallback_omits_technical_details(monkeypatch):
