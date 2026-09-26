@@ -19,6 +19,13 @@ def database_url() -> str:
     return os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
 
 
+def include_object(object_, name, type_, reflected, compare_to) -> bool:
+    """Keep the legacy notes table outside autogeneration until retirement."""
+    if type_ == "table" and name == "notes":
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     url = database_url()
     context.configure(
@@ -28,6 +35,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         render_as_batch=url.startswith("sqlite"),
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -47,6 +55,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             render_as_batch=connection.dialect.name == "sqlite",
+            include_object=include_object,
         )
 
         with context.begin_transaction():

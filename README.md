@@ -69,6 +69,25 @@ python -m alembic current
 
 The application does not run Alembic migrations automatically at startup.
 
+### Canonical inbox-item model
+
+The canonical API is `/api/items`. The browser uses this API for text-item
+creation, listing, editing, and deletion. Items include:
+
+- `id`, `item_type`, and `processing_status`;
+- optional `title`, `source_url`, `original_filename`, and `mime_type`;
+- `raw_text`, `created_at`, and optional `updated_at`.
+
+Only `item_type="text"` is created or displayed in this version. File uploads,
+URLs, voice, and image inputs are not implemented.
+
+The `/api/notes` routes remain temporarily available as deprecated
+compatibility adapters. They read and write the same `inbox_items` records
+while preserving the former note response shape. Migration `0003` copies
+legacy notes into `inbox_items` with the same IDs and timestamps. The legacy
+`notes` table is retained unchanged as a migration safety copy and is no
+longer authoritative.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
@@ -141,7 +160,8 @@ life-inbox/
 │   ├── env.py
 │   └── versions/
 │       ├── 0001_create_notes_table.py
-│       └── 0002_add_updated_at_to_notes.py
+│       ├── 0002_add_updated_at_to_notes.py
+│       └── 0003_create_inbox_items.py
 ├── alembic.ini
 ├── data/
 ├── scripts/seed_demo_notes.py
