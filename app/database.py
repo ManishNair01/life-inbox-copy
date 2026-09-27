@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    or_,
     select,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -169,10 +170,56 @@ def add_item_to_db(raw_text: str) -> dict:
         return _item_to_dict(item)
 
 
-def list_items_from_db() -> list[dict]:
+def list_items_from_db(
+    search: Optional[str] = None,
+    item_type: Optional[str] = None,
+    category: Optional[str] = None,
+    priority: Optional[str] = None,
+    processing_status: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict]:
     with SessionLocal() as session:
+        statement = select(InboxItemRecord)
+
+        if category or priority:
+            statement = statement.join(
+                ItemInsightRecord,
+                ItemInsightRecord.item_id == InboxItemRecord.id,
+            )
+
+        search_text = (search or "").strip()
+        if search_text:
+            statement = statement.where(
+                or_(
+                    InboxItemRecord.raw_text.icontains(
+                        search_text,
+                        autoescape=True,
+                    ),
+                    InboxItemRecord.title.icontains(
+                        search_text,
+                        autoescape=True,
+                    ),
+                )
+            )
+        if item_type:
+            statement = statement.where(
+                InboxItemRecord.item_type == item_type
+            )
+        if category:
+            statement = statement.where(
+                ItemInsightRecord.category == category
+            )
+        if priority:
+            statement = statement.where(
+                ItemInsightRecord.priority == priority
+            )
+        if processing_status:
+            statement = statement.where(
+                InboxItemRecord.processing_status == processing_status
+            )
+
         items = session.scalars(
-            select(InboxItemRecord).order_by(InboxItemRecord.id.asc())
+            statement.order_by(InboxItemRecord.id.asc()).limit(limit)
         ).all()
         return [_item_to_dict(item) for item in items]
 

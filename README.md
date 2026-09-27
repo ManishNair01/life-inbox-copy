@@ -81,6 +81,11 @@ creation, listing, editing, and deletion. Items include:
 Only `item_type="text"` is created or displayed in this version. File uploads,
 URLs, voice, and image inputs are not implemented.
 
+`GET /api/items` accepts optional `q`, `item_type`, `category`, `priority`,
+`processing_status`, and `limit` query parameters. Text search is
+case-insensitive and matches raw text or title. Category and priority filters
+use the latest saved analysis insights.
+
 The `/api/notes` routes remain temporarily available as deprecated
 compatibility adapters. They read and write the same `inbox_items` records
 while preserving the former note response shape. Migration `0003` copies

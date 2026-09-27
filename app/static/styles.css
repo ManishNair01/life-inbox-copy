@@ -13,6 +13,12 @@ button:disabled { cursor: not-allowed; opacity: 0.65; }
 .task { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin: 12px 0; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
 .task-toolbar { display: flex; align-items: center; gap: 8px; }
 .task-toolbar select { padding: 7px 10px; border: 1px solid #ccc; border-radius: 8px; background: white; }
+.search-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 14px; background: white; border: 1px solid #e5e7eb; border-radius: 12px; }
+.search-toolbar label { display: grid; gap: 5px; color: #555; font-size: 13px; }
+.search-toolbar input, .search-toolbar select { min-width: 130px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; background: white; }
+.search-toolbar input[type="search"] { min-width: 220px; }
+.search-actions { display: flex; gap: 8px; }
+.search-actions button { margin: 0; }
 .task-meta { color: #666; font-size: 13px; margin-top: 6px; }
 .note-actions { display: flex; gap: 8px; margin-top: 10px; }
 .task-actions { display: flex; gap: 8px; margin-top: 10px; }
