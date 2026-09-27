@@ -26,7 +26,7 @@
     <h2>Tasks</h2>
     <div class="task-toolbar">
       <label for="taskStatusFilter">Show</label>
-      <select id="taskStatusFilter" onchange="loadTasks()">
+      <select id="taskStatusFilter" onchange="changeTaskStatusFilter()">
         <option value="open">Open</option>
         <option value="completed">Completed</option>
         <option value="dismissed">Dismissed</option>
@@ -36,6 +36,46 @@
     <div id="tasks"></div>
 
     <h2>Raw saved notes</h2>
+    <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)">
+      <label>
+        Search
+        <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
+      </label>
+      <label>
+        Type
+        <select id="itemTypeFilter">
+          <option value="">All</option>
+          <option value="text">Text</option>
+        </select>
+      </label>
+      <label>
+        Category
+        <select id="categoryFilter">
+          <option value="">All</option>
+        </select>
+      </label>
+      <label>
+        Priority
+        <select id="priorityFilter">
+          <option value="">All</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+      </label>
+      <label>
+        Processing
+        <select id="processingStatusFilter">
+          <option value="">All</option>
+          <option value="ready">Ready</option>
+        </select>
+      </label>
+      <div class="search-actions">
+        <button type="submit">Search</button>
+        <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+      </div>
+    </form>
+    <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
     <div id="notes"></div>
   </div>
 

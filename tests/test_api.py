@@ -90,6 +90,152 @@ def test_create_and_list_canonical_text_item(client):
     assert client.get("/api/items").json() == [item]
 
 
+def test_item_search_is_case_insensitive_for_raw_text_and_title(client):
+    text_match = client.post(
+        "/api/items",
+        json={"raw_text": "Plan the SUMMER holiday"},
+    ).json()
+    title_match = client.post(
+        "/api/items",
+        json={"raw_text": "Review the figures"},
+    ).json()
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        item = session.get(database.InboxItemRecord, title_match["id"])
+        item.title = "Annual BUDGET"
+        session.commit()
+
+    raw_results = client.get("/api/items", params={"q": "summer"})
+    title_results = client.get("/api/items", params={"q": "budget"})
+
+    assert raw_results.status_code == 200
+    assert [item["id"] for item in raw_results.json()] == [text_match["id"]]
+    assert title_results.status_code == 200
+    assert [item["id"] for item in title_results.json()] == [
+        title_match["id"]
+    ]
+
+
+def test_item_search_combines_all_filters(client):
+    first = client.post(
+        "/api/items",
+        json={"raw_text": "Quarterly REPORT"},
+    ).json()
+    second = client.post(
+        "/api/items",
+        json={"raw_text": "Quarterly report archive"},
+    ).json()
+    third = client.post(
+        "/api/items",
+        json={"raw_text": "Personal report"},
+    ).json()
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        run = database.AnalysisRunRecord(
+            started_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:00:01+00:00",
+            status="succeeded",
+            mode="fallback_no_api_call",
+            result_json="{}",
+        )
+        session.add(run)
+        session.flush()
+        session.add_all(
+            [
+                database.ItemInsightRecord(
+                    item_id=first["id"],
+                    analysis_run_id=run.id,
+                    category="Work",
+                    concise_title="Quarterly report",
+                    priority="High",
+                    updated_at=run.completed_at,
+                ),
+                database.ItemInsightRecord(
+                    item_id=second["id"],
+                    analysis_run_id=run.id,
+                    category="Work",
+                    concise_title="Archived report",
+                    priority="High",
+                    updated_at=run.completed_at,
+                ),
+                database.ItemInsightRecord(
+                    item_id=third["id"],
+                    analysis_run_id=run.id,
+                    category="Personal",
+                    concise_title="Personal report",
+                    priority="Low",
+                    updated_at=run.completed_at,
+                ),
+            ]
+        )
+        archived = session.get(database.InboxItemRecord, second["id"])
+        archived.processing_status = "pending"
+        session.commit()
+
+    response = client.get(
+        "/api/items",
+        params={
+            "q": "report",
+            "item_type": "text",
+            "category": "Work",
+            "priority": "High",
+            "processing_status": "ready",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [first["id"]]
+
+
+def test_item_search_handles_empty_results_and_sql_characters(client):
+    percent_match = client.post(
+        "/api/items",
+        json={"raw_text": "Discount is 50% today"},
+    ).json()
+    other = client.post(
+        "/api/items",
+        json={"raw_text": "Ordinary note"},
+    ).json()
+
+    literal_percent = client.get("/api/items", params={"q": "50%"})
+    unsafe_text = client.get(
+        "/api/items",
+        params={"q": "%' OR 1=1 --"},
+    )
+    no_results = client.get("/api/items", params={"q": "not-present"})
+    empty_search = client.get("/api/items", params={"q": "   "})
+
+    assert [item["id"] for item in literal_percent.json()] == [
+        percent_match["id"]
+    ]
+    assert unsafe_text.status_code == 200
+    assert unsafe_text.json() == []
+    assert no_results.status_code == 200
+    assert no_results.json() == []
+    assert [item["id"] for item in empty_search.json()] == [
+        percent_match["id"],
+        other["id"],
+    ]
+
+
+def test_item_search_applies_conservative_result_limit(client):
+    for number in range(3):
+        client.post(
+            "/api/items",
+            json={"raw_text": f"Matching item {number}"},
+        )
+
+    response = client.get(
+        "/api/items",
+        params={"q": "matching", "limit": 2},
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [1, 2]
+
+
 def test_update_canonical_text_item(client):
     created = client.post(
         "/api/items",

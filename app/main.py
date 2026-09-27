@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, Response
@@ -32,6 +32,7 @@ from app.schemas import (
     NoteCreate,
     NoteUpdate,
     PersistedAnalysis,
+    Priority,
     Task,
     TaskListStatus,
 )
@@ -64,9 +65,23 @@ def create_item(payload: InboxItemCreate):
 
 
 @app.get("/api/items", response_model=List[InboxItem])
-def get_items():
+def get_items(
+    search: Optional[str] = Query(None, alias="q", max_length=200),
+    item_type: Optional[str] = Query(None, max_length=100),
+    category: Optional[str] = Query(None, max_length=100),
+    priority: Optional[Priority] = Query(None),
+    processing_status: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(100, ge=1, le=100),
+):
     try:
-        return list_items_from_db()
+        return list_items_from_db(
+            search=search,
+            item_type=item_type,
+            category=category,
+            priority=priority,
+            processing_status=processing_status,
+            limit=limit,
+        )
     except Exception as exc:
         logger.exception("Failed to load inbox items")
         raise HTTPException(

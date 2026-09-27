@@ -2,6 +2,13 @@ let isSavingNote = false;
 let isAnalyzingInbox = false;
 const pendingNoteActions = new Set();
 const pendingTaskActions = new Set();
+const itemFilterFields = {
+  q: 'itemSearch',
+  item_type: 'itemTypeFilter',
+  category: 'categoryFilter',
+  priority: 'priorityFilter',
+  processing_status: 'processingStatusFilter'
+};
 
 function setStatus(elementId, message, isError = false) {
   const element = document.getElementById(elementId);
@@ -14,6 +21,113 @@ function setButtonBusy(buttonId, busy, busyLabel, idleLabel) {
   button.disabled = busy;
   button.textContent = busy ? busyLabel : idleLabel;
   button.setAttribute('aria-busy', String(busy));
+}
+
+function itemFilterParams() {
+  const params = new URLSearchParams();
+  for (const [name, elementId] of Object.entries(itemFilterFields)) {
+    const value = document.getElementById(elementId).value.trim();
+    if (value) params.set(name, value);
+  }
+  return params;
+}
+
+function hasItemFilters() {
+  return itemFilterParams().size > 0;
+}
+
+function updateUrl(updates) {
+  const url = new URL(window.location.href);
+  for (const [name, value] of Object.entries(updates)) {
+    if (value) {
+      url.searchParams.set(name, value);
+    } else {
+      url.searchParams.delete(name);
+    }
+  }
+  window.history.pushState({}, '', url);
+}
+
+function syncControlsFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  for (const [name, elementId] of Object.entries(itemFilterFields)) {
+    const element = document.getElementById(elementId);
+    const value = params.get(name) || '';
+    if (
+      name === 'category'
+      && value
+      && !Array.from(element.options).some(option => option.value === value)
+    ) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      element.appendChild(option);
+    }
+    element.value = value;
+  }
+
+  const taskStatus = params.get('task_status');
+  document.getElementById('taskStatusFilter').value =
+    ['open', 'completed', 'dismissed'].includes(taskStatus)
+      ? taskStatus
+      : 'open';
+}
+
+function populateCategoryFilter(data) {
+  const select = document.getElementById('categoryFilter');
+  const selected =
+    new URLSearchParams(window.location.search).get('category')
+    || select.value;
+  const categories = Array.from(
+    new Set((data.buckets || []).map(bucket => bucket.name))
+  ).sort((first, second) => first.localeCompare(second));
+
+  select.replaceChildren();
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = 'All';
+  select.appendChild(allOption);
+
+  if (selected && !categories.includes(selected)) {
+    categories.push(selected);
+    categories.sort((first, second) => first.localeCompare(second));
+  }
+  for (const category of categories) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    select.appendChild(option);
+  }
+  select.value = selected;
+}
+
+function applyItemFilters(event) {
+  event.preventDefault();
+  const values = {};
+  const params = itemFilterParams();
+  for (const name of Object.keys(itemFilterFields)) {
+    values[name] = params.get(name) || '';
+  }
+  updateUrl(values);
+  loadNotes();
+}
+
+function clearItemFilters() {
+  for (const elementId of Object.values(itemFilterFields)) {
+    document.getElementById(elementId).value = '';
+  }
+  updateUrl(
+    Object.fromEntries(
+      Object.keys(itemFilterFields).map(name => [name, ''])
+    )
+  );
+  loadNotes();
+}
+
+function changeTaskStatusFilter() {
+  const status = document.getElementById('taskStatusFilter').value;
+  updateUrl({task_status: status});
+  loadTasks();
 }
 
 async function fetchJson(url, options, friendlyError) {
@@ -396,6 +510,7 @@ async function loadLatestAnalysis() {
     );
     if (!data) return;
 
+    populateCategoryFilter(data);
     renderAnalysis(data);
     const generatedAt = new Date(data.generated_at).toLocaleString();
     setStatus(
@@ -429,6 +544,7 @@ async function analyzeInbox() {
       {method: 'POST'},
       'Unable to analyze inbox.'
     );
+    populateCategoryFilter(data);
     renderAnalysis(data);
     await loadTasks();
     setStatus('analysisStatus', 'Analysis complete.');
@@ -452,25 +568,60 @@ async function analyzeInbox() {
 async function loadNotes(
   failureMessage = 'We could not load your notes. Reload to try again.'
 ) {
+  const params = itemFilterParams();
+  const filtered = params.size > 0;
+  const query = params.toString();
   try {
     const notes = await fetchJson(
-      '/api/items',
+      `/api/items${query ? `?${query}` : ''}`,
       undefined,
       'Unable to load notes.'
     );
     const root = document.getElementById('notes');
     root.innerHTML = '';
 
+    if (!notes.length) {
+      root.innerHTML = filtered
+        ? '<div class="panel muted">No inbox items match these filters.</div>'
+        : '<div class="panel muted">No saved notes yet.</div>';
+      setStatus(
+        'searchStatus',
+        filtered ? 'No results found.' : ''
+      );
+      return true;
+    }
+
     for (const note of notes.filter(item => item.item_type === 'text')) {
       root.appendChild(renderNote(note));
     }
+    setStatus(
+      'searchStatus',
+      filtered
+        ? `${notes.length} matching item${notes.length === 1 ? '' : 's'}.`
+        : ''
+    );
     return true;
   } catch {
-    setStatus('noteStatus', failureMessage, true);
+    if (filtered) {
+      setStatus(
+        'searchStatus',
+        'Search failed. Please try again.',
+        true
+      );
+    } else {
+      setStatus('noteStatus', failureMessage, true);
+    }
     return false;
   }
 }
 
+syncControlsFromUrl();
 loadNotes();
 loadLatestAnalysis();
 loadTasks();
+
+window.addEventListener('popstate', () => {
+  syncControlsFromUrl();
+  loadNotes();
+  loadTasks();
+});
