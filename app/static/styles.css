@@ -10,8 +10,14 @@ button.danger { background: #b42318; }
 button:disabled { cursor: not-allowed; opacity: 0.65; }
 .panel { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin: 12px 0; }
 .note { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin: 12px 0; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.task { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin: 12px 0; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.task-toolbar { display: flex; align-items: center; gap: 8px; }
+.task-toolbar select { padding: 7px 10px; border: 1px solid #ccc; border-radius: 8px; background: white; }
+.task-meta { color: #666; font-size: 13px; margin-top: 6px; }
 .note-actions { display: flex; gap: 8px; margin-top: 10px; }
+.task-actions { display: flex; gap: 8px; margin-top: 10px; }
 .note-actions button { margin: 0; padding: 7px 11px; }
+.task-actions button { margin: 0; padding: 7px 11px; }
 .note-edit-input { min-height: 72px; }
 .time { color: #777; font-size: 12px; margin-top: 6px; }
 .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2f7; margin-left: 6px; font-size: 12px; }

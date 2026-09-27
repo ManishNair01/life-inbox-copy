@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -17,6 +17,8 @@ from app.database import (
     init_db,
     list_items_from_db,
     list_notes_from_db,
+    list_tasks_from_db,
+    set_task_status,
     start_analysis_run,
     update_item_in_db,
     update_note_in_db,
@@ -30,6 +32,8 @@ from app.schemas import (
     NoteCreate,
     NoteUpdate,
     PersistedAnalysis,
+    Task,
+    TaskListStatus,
 )
 
 
@@ -166,6 +170,50 @@ def delete_note(note_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Note not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/api/tasks", response_model=List[Task])
+def get_tasks(
+    task_status: TaskListStatus = Query("open", alias="status"),
+):
+    try:
+        return list_tasks_from_db(task_status)
+    except Exception as exc:
+        logger.exception("Failed to load tasks")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load tasks. Please try again.",
+        ) from exc
+
+
+def _transition_task(task_id: int, task_status: str):
+    try:
+        task = set_task_status(task_id, task_status)
+    except Exception as exc:
+        logger.exception("Failed to update task status")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update task. Please try again.",
+        ) from exc
+
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
+
+
+@app.post("/api/tasks/{task_id}/complete", response_model=Task)
+def complete_task(task_id: int):
+    return _transition_task(task_id, "completed")
+
+
+@app.post("/api/tasks/{task_id}/reopen", response_model=Task)
+def reopen_task(task_id: int):
+    return _transition_task(task_id, "open")
+
+
+@app.post("/api/tasks/{task_id}/dismiss", response_model=Task)
+def dismiss_task(task_id: int):
+    return _transition_task(task_id, "dismissed")
 
 
 @app.get(

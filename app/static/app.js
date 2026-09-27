@@ -1,6 +1,7 @@
 let isSavingNote = false;
 let isAnalyzingInbox = false;
 const pendingNoteActions = new Set();
+const pendingTaskActions = new Set();
 
 function setStatus(elementId, message, isError = false) {
   const element = document.getElementById(elementId);
@@ -225,6 +226,120 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
   }
 }
 
+function renderTask(task) {
+  const root = document.createElement('div');
+  root.className = 'task';
+  root.dataset.taskId = String(task.id);
+
+  const text = document.createElement('strong');
+  text.textContent = task.text;
+
+  const priority = document.createElement('span');
+  priority.className = 'pill';
+  priority.textContent = task.priority;
+
+  const content = document.createElement('div');
+  content.append(text, priority);
+
+  const meta = document.createElement('div');
+  meta.className = 'task-meta';
+  const timing = task.timing_text ? ` · ${task.timing_text}` : '';
+  const sources = task.source_item_ids
+    .map(itemId => `#${itemId}`)
+    .join(', ');
+  meta.textContent = `${task.status}${timing} · Sources: ${sources}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'task-actions';
+
+  if (task.status === 'open') {
+    actions.append(
+      actionButton('Complete', '', () => {
+        transitionTask(task.id, 'complete', actions);
+      }),
+      actionButton('Dismiss', 'secondary', () => {
+        transitionTask(task.id, 'dismiss', actions);
+      })
+    );
+  } else {
+    actions.append(
+      actionButton('Reopen', '', () => {
+        transitionTask(task.id, 'reopen', actions);
+      })
+    );
+  }
+
+  root.append(content, meta, actions);
+  return root;
+}
+
+async function transitionTask(taskId, action, actions) {
+  if (pendingTaskActions.has(taskId)) return;
+
+  pendingTaskActions.add(taskId);
+  const buttons = actions.querySelectorAll('button');
+  buttons.forEach(button => {
+    button.disabled = true;
+  });
+  setStatus('taskStatus', 'Updating task…');
+
+  try {
+    await fetchJson(
+      `/api/tasks/${taskId}/${action}`,
+      {method: 'POST'},
+      'Unable to update task.'
+    );
+    const messages = {
+      complete: 'Task completed.',
+      dismiss: 'Task dismissed.',
+      reopen: 'Task reopened.'
+    };
+    setStatus('taskStatus', messages[action]);
+    await loadTasks();
+  } catch {
+    setStatus(
+      'taskStatus',
+      'We could not update this task. Please try again.',
+      true
+    );
+    buttons.forEach(button => {
+      button.disabled = false;
+    });
+  } finally {
+    pendingTaskActions.delete(taskId);
+  }
+}
+
+async function loadTasks() {
+  const filter = document.getElementById('taskStatusFilter').value;
+  try {
+    const tasks = await fetchJson(
+      `/api/tasks?status=${encodeURIComponent(filter)}`,
+      undefined,
+      'Unable to load tasks.'
+    );
+    const root = document.getElementById('tasks');
+    root.innerHTML = '';
+
+    if (!tasks.length) {
+      root.innerHTML = '<div class="panel muted">No tasks in this view.</div>';
+      return true;
+    }
+
+    for (const task of tasks) {
+      root.appendChild(renderTask(task));
+    }
+    return true;
+  } catch {
+    setStatus(
+      'taskStatus',
+      'We could not load tasks. Reload to try again.',
+      true
+    );
+    return false;
+  }
+}
+
 function renderAnalysis(data) {
   const root = document.getElementById('aiOutput');
   const generatedAt = data.generated_at
@@ -315,6 +430,7 @@ async function analyzeInbox() {
       'Unable to analyze inbox.'
     );
     renderAnalysis(data);
+    await loadTasks();
     setStatus('analysisStatus', 'Analysis complete.');
   } catch {
     setStatus(
@@ -357,3 +473,4 @@ async function loadNotes(
 
 loadNotes();
 loadLatestAnalysis();
+loadTasks();
