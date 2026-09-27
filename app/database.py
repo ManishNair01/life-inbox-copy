@@ -1,10 +1,20 @@
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import Column, ForeignKey, Integer, Text, create_engine, select
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    select,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -29,6 +39,10 @@ READY_STATUS = "ready"
 ANALYSIS_RUNNING = "running"
 ANALYSIS_SUCCEEDED = "succeeded"
 ANALYSIS_FAILED = "failed"
+TASK_OPEN = "open"
+TASK_COMPLETED = "completed"
+TASK_DISMISSED = "dismissed"
+TASK_STATUSES = {TASK_OPEN, TASK_COMPLETED, TASK_DISMISSED}
 
 
 class InboxItemRecord(Base):
@@ -76,6 +90,49 @@ class ItemInsightRecord(Base):
     concise_title = Column(Text, nullable=False)
     priority = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=False)
+
+
+class TaskRecord(Base):
+    __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "priority IN ('High', 'Medium', 'Low')",
+            name="ck_tasks_priority",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'completed', 'dismissed')",
+            name="ck_tasks_status",
+        ),
+        UniqueConstraint("dedup_key"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text = Column(Text, nullable=False)
+    priority = Column(Text, nullable=False)
+    timing_text = Column(Text, nullable=True)
+    status = Column(Text, nullable=False)
+    dedup_key = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
+    updated_at = Column(Text, nullable=False)
+
+
+class TaskSourceItemRecord(Base):
+    __tablename__ = "task_source_items"
+    __table_args__ = (
+        UniqueConstraint("item_id", name="uq_task_source_items_item_id"),
+    )
+
+    task_id = Column(
+        Integer,
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    item_id = Column(
+        Integer,
+        ForeignKey("inbox_items.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
 
 
 def init_db():
@@ -212,6 +269,92 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                 insight.priority = analyzed_item["priority"]
                 insight.updated_at = completed_at
 
+        claimed_source_ids = set()
+        for todo in result["todos"]:
+            source_item_ids = [
+                item_id
+                for item_id in sorted(set(todo["source_note_ids"]))
+                if item_id not in claimed_source_ids
+            ]
+            if not source_item_ids:
+                continue
+            claimed_source_ids.update(source_item_ids)
+
+            for item_id in source_item_ids:
+                if session.get(InboxItemRecord, item_id) is None:
+                    raise ValueError(
+                        f"Task references missing item {item_id}"
+                    )
+
+            existing_tasks = session.scalars(
+                select(TaskRecord)
+                .join(TaskSourceItemRecord)
+                .where(TaskSourceItemRecord.item_id.in_(source_item_ids))
+                .distinct()
+                .order_by(TaskRecord.id.asc())
+            ).all()
+
+            if not existing_tasks:
+                task = TaskRecord(
+                    text=todo["task"],
+                    priority=todo["priority"],
+                    timing_text=todo["when"],
+                    status=TASK_OPEN,
+                    dedup_key=_task_dedup_key(source_item_ids),
+                    created_at=completed_at,
+                    updated_at=completed_at,
+                )
+                session.add(task)
+                session.flush()
+                for item_id in source_item_ids:
+                    session.add(
+                        TaskSourceItemRecord(
+                            task_id=task.id,
+                            item_id=item_id,
+                        )
+                    )
+                continue
+
+            for task in existing_tasks:
+                task_source_ids = session.scalars(
+                    select(TaskSourceItemRecord.item_id).where(
+                        TaskSourceItemRecord.task_id == task.id
+                    )
+                ).all()
+                changed = (
+                    task.text != todo["task"]
+                    or task.priority != todo["priority"]
+                    or task.timing_text != todo["when"]
+                )
+                task.text = todo["task"]
+                task.priority = todo["priority"]
+                task.timing_text = todo["when"]
+                task.dedup_key = _task_dedup_key(list(task_source_ids))
+                if changed:
+                    task.updated_at = completed_at
+
+            if len(existing_tasks) == 1:
+                task = existing_tasks[0]
+                linked_source_ids = set(
+                    session.scalars(
+                        select(TaskSourceItemRecord.item_id).where(
+                            TaskSourceItemRecord.task_id == task.id
+                        )
+                    ).all()
+                )
+                for item_id in source_item_ids:
+                    if item_id not in linked_source_ids:
+                        session.add(
+                            TaskSourceItemRecord(
+                                task_id=task.id,
+                                item_id=item_id,
+                            )
+                        )
+                        linked_source_ids.add(item_id)
+                task.dedup_key = _task_dedup_key(
+                    sorted(linked_source_ids)
+                )
+
         run.completed_at = completed_at
         run.status = ANALYSIS_SUCCEEDED
         run.mode = result["mode"]
@@ -256,3 +399,57 @@ def get_latest_successful_analysis() -> Optional[dict]:
             "analysis_run_id": run.id,
             "generated_at": run.completed_at,
         }
+
+
+def _task_dedup_key(source_item_ids: list[int]) -> str:
+    fingerprint = json.dumps(
+        sorted(set(source_item_ids)),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+
+
+def _task_to_dict(session, task: TaskRecord) -> dict:
+    source_item_ids = session.scalars(
+        select(TaskSourceItemRecord.item_id)
+        .where(TaskSourceItemRecord.task_id == task.id)
+        .order_by(TaskSourceItemRecord.item_id.asc())
+    ).all()
+    return {
+        "id": task.id,
+        "text": task.text,
+        "priority": task.priority,
+        "timing_text": task.timing_text,
+        "status": task.status,
+        "source_item_ids": list(source_item_ids),
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+    }
+
+
+def list_tasks_from_db(status_filter: str = TASK_OPEN) -> list[dict]:
+    if status_filter not in TASK_STATUSES | {"all"}:
+        raise ValueError("Unsupported task status")
+
+    with SessionLocal() as session:
+        statement = select(TaskRecord).order_by(TaskRecord.id.asc())
+        if status_filter != "all":
+            statement = statement.where(TaskRecord.status == status_filter)
+        tasks = session.scalars(statement).all()
+        return [_task_to_dict(session, task) for task in tasks]
+
+
+def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
+    if task_status not in TASK_STATUSES:
+        raise ValueError("Unsupported task status")
+
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+        if task.status != task_status:
+            task.status = task_status
+            task.updated_at = datetime.now(timezone.utc).isoformat()
+            session.commit()
+        return _task_to_dict(session, task)

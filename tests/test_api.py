@@ -383,6 +383,217 @@ def test_successful_analysis_persists_run_and_item_insight(client):
         assert insight.priority == "High"
 
 
+def test_analysis_creates_open_task_with_source_link(client):
+    created = client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    ).json()
+
+    client.post("/api/analyze")
+    response = client.get("/api/tasks")
+
+    assert response.status_code == 200
+    tasks = response.json()
+    assert len(tasks) == 1
+    assert tasks[0]["text"] == "Call the team tomorrow"
+    assert tasks[0]["priority"] == "High"
+    assert tasks[0]["timing_text"] is None
+    assert tasks[0]["status"] == "open"
+    assert tasks[0]["source_item_ids"] == [created["id"]]
+    assert tasks[0]["created_at"]
+    assert tasks[0]["updated_at"]
+
+
+def test_task_statuses_survive_reload_and_reanalysis_without_duplicates(client):
+    client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    )
+    client.post("/api/analyze")
+    task = client.get("/api/tasks").json()[0]
+
+    completed = client.post(
+        f"/api/tasks/{task['id']}/complete"
+    ).json()
+
+    assert completed["status"] == "completed"
+    assert client.get("/api/tasks").json() == []
+    assert client.get("/api/tasks?status=completed").json() == [completed]
+
+    client.post("/api/analyze")
+    all_tasks = client.get("/api/tasks?status=all").json()
+    assert len(all_tasks) == 1
+    assert all_tasks[0]["id"] == task["id"]
+    assert all_tasks[0]["status"] == "completed"
+
+    reopened = client.post(
+        f"/api/tasks/{task['id']}/reopen"
+    ).json()
+    assert reopened["status"] == "open"
+    assert client.get("/api/tasks").json() == [reopened]
+
+    dismissed = client.post(
+        f"/api/tasks/{task['id']}/dismiss"
+    ).json()
+    assert dismissed["status"] == "dismissed"
+    assert client.get("/api/tasks").json() == []
+    assert client.get("/api/tasks?status=dismissed").json() == [dismissed]
+
+    client.post("/api/analyze")
+    final_tasks = client.get("/api/tasks?status=all").json()
+    assert len(final_tasks) == 1
+    assert final_tasks[0]["id"] == task["id"]
+    assert final_tasks[0]["status"] == "dismissed"
+
+
+def test_reanalysis_updates_task_by_source_without_changing_status(
+    client, monkeypatch
+):
+    item = client.post(
+        "/api/items",
+        json={"raw_text": "Prepare the class notes"},
+    ).json()
+    main = sys.modules["app.main"]
+    analyses = iter(
+        [
+            ("Prepare class notes", "Low"),
+            ("Prepare notes for class", "High"),
+        ]
+    )
+
+    def analyze(_notes):
+        task_text, priority = next(analyses)
+        return {
+            "buckets": [
+                {
+                    "name": "Work",
+                    "notes": [
+                        {
+                            "id": item["id"],
+                            "title": task_text,
+                            "priority": priority,
+                        }
+                    ],
+                }
+            ],
+            "todos": [
+                {
+                    "task": task_text,
+                    "priority": priority,
+                    "source_note_ids": [item["id"]],
+                    "when": None,
+                }
+            ],
+            "priority_view": {
+                "High": (
+                    [{"id": item["id"], "title": task_text}]
+                    if priority == "High"
+                    else []
+                ),
+                "Medium": [],
+                "Low": (
+                    [{"id": item["id"], "title": task_text}]
+                    if priority == "Low"
+                    else []
+                ),
+            },
+            "mode": "openai",
+        }
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+
+    client.post("/api/analyze")
+    original = client.get("/api/tasks").json()[0]
+    client.post(f"/api/tasks/{original['id']}/complete")
+
+    client.post("/api/analyze")
+    tasks = client.get("/api/tasks?status=all").json()
+
+    assert len(tasks) == 1
+    assert tasks[0]["id"] == original["id"]
+    assert tasks[0]["text"] == "Prepare notes for class"
+    assert tasks[0]["priority"] == "High"
+    assert tasks[0]["status"] == "completed"
+    assert tasks[0]["source_item_ids"] == [item["id"]]
+
+
+def test_generated_task_preserves_multiple_source_links(client, monkeypatch):
+    first = client.post(
+        "/api/items", json={"raw_text": "First source"}
+    ).json()
+    second = client.post(
+        "/api/items", json={"raw_text": "Second source"}
+    ).json()
+    main = sys.modules["app.main"]
+
+    monkeypatch.setattr(
+        main,
+        "analyze_inbox_with_openai",
+        lambda _notes: {
+            "buckets": [
+                {
+                    "name": "Work",
+                    "notes": [
+                        {
+                            "id": first["id"],
+                            "title": "First source",
+                            "priority": "Medium",
+                        },
+                        {
+                            "id": second["id"],
+                            "title": "Second source",
+                            "priority": "Medium",
+                        },
+                    ],
+                }
+            ],
+            "todos": [
+                {
+                    "task": "Follow up on both sources",
+                    "priority": "Medium",
+                    "source_note_ids": [second["id"], first["id"]],
+                    "when": "tomorrow",
+                }
+            ],
+            "priority_view": {
+                "High": [],
+                "Medium": [
+                    {"id": first["id"], "title": "First source"},
+                    {"id": second["id"], "title": "Second source"},
+                ],
+                "Low": [],
+            },
+            "mode": "openai",
+        },
+    )
+
+    response = client.post("/api/analyze")
+
+    assert response.status_code == 200
+    task = client.get("/api/tasks").json()[0]
+    assert task["text"] == "Follow up on both sources"
+    assert task["timing_text"] == "tomorrow"
+    assert task["source_item_ids"] == [first["id"], second["id"]]
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        assert session.query(database.TaskSourceItemRecord).count() == 2
+
+
+@pytest.mark.parametrize("action", ["complete", "reopen", "dismiss"])
+def test_task_status_actions_return_404_for_unknown_id(client, action):
+    response = client.post(f"/api/tasks/999/{action}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Task not found."}
+
+
+def test_task_list_rejects_invalid_status(client):
+    response = client.get("/api/tasks?status=invalid")
+
+    assert response.status_code == 422
+
+
 def test_failed_analysis_keeps_previous_success(client, monkeypatch):
     client.post(
         "/api/items",

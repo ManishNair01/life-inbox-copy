@@ -93,7 +93,7 @@ class AnalysisBucket(StrictAnalysisModel):
 class AnalysisTodo(StrictAnalysisModel):
     task: str = Field(min_length=1)
     priority: Priority
-    source_note_ids: List[int]
+    source_note_ids: List[int] = Field(min_length=1)
     when: Optional[str] = None
 
 
@@ -160,3 +160,18 @@ class AnalysisResult(StrictAnalysisModel):
 class PersistedAnalysis(AnalysisResult):
     analysis_run_id: int
     generated_at: str
+
+
+TaskStatus = Literal["open", "completed", "dismissed"]
+TaskListStatus = Literal["open", "completed", "dismissed", "all"]
+
+
+class Task(BaseModel):
+    id: int
+    text: str
+    priority: Priority
+    timing_text: Optional[str]
+    status: TaskStatus
+    source_item_ids: List[int]
+    created_at: str
+    updated_at: str

@@ -99,6 +99,26 @@ OpenAI. The browser uses it on page load and displays when the result was
 generated. Failed runs are recorded separately and never replace the previous
 successful result or its item insights.
 
+### Persistent tasks
+
+Successful analysis runs convert extracted ToDos into persistent tasks.
+Generated tasks start as `open` and retain links to every source inbox item.
+The default task view shows only open tasks; completed and dismissed tasks can
+be viewed separately and reopened.
+
+Task APIs:
+
+- `GET /api/tasks?status=open` lists tasks (`completed`, `dismissed`, and
+  `all` are also supported);
+- `POST /api/tasks/{id}/complete` completes a task;
+- `POST /api/tasks/{id}/reopen` reopens a task;
+- `POST /api/tasks/{id}/dismiss` dismisses a task.
+
+Each inbox item can source at most one generated task. Reanalysis updates that
+task's latest text, priority, and timing in place instead of creating a
+duplicate when AI wording or priority changes. Its open, completed, or
+dismissed status is never changed by AI analysis.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
@@ -173,7 +193,9 @@ life-inbox/
 │       ├── 0001_create_notes_table.py
 │       ├── 0002_add_updated_at_to_notes.py
 │       ├── 0003_create_inbox_items.py
-│       └── 0004_persist_analysis_results.py
+│       ├── 0004_persist_analysis_results.py
+│       ├── 0005_create_tasks.py
+│       └── 0006_deduplicate_tasks_by_source.py
 ├── alembic.ini
 ├── data/
 ├── scripts/seed_demo_notes.py

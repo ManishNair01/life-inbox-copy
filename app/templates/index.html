@@ -23,6 +23,18 @@
       <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”.</span>
     </div>
 
+    <h2>Tasks</h2>
+    <div class="task-toolbar">
+      <label for="taskStatusFilter">Show</label>
+      <select id="taskStatusFilter" onchange="loadTasks()">
+        <option value="open">Open</option>
+        <option value="completed">Completed</option>
+        <option value="dismissed">Dismissed</option>
+      </select>
+    </div>
+    <p id="taskStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="tasks"></div>
+
     <h2>Raw saved notes</h2>
     <div id="notes"></div>
   </div>
