@@ -189,6 +189,10 @@ class Task(BaseModel):
     timing_text: Optional[str]
     ai_timing_text: Optional[str] = None
     timing_confirmed: bool = False
+    due_on: Optional[str] = None
+    due_confidence: Optional[str] = None
+    snoozed_until: Optional[str] = None
+    reminder_at: Optional[str] = None
     status: TaskStatus
     source_item_ids: List[int]
     created_at: str
@@ -197,6 +201,25 @@ class Task(BaseModel):
 
 class TaskTimingConfirm(BaseModel):
     timing_text: Optional[str] = Field(default=None, max_length=200)
+
+
+class TaskSnoozeRequest(BaseModel):
+    until: str = Field(min_length=8, max_length=32)
+
+
+class TaskReminderRequest(BaseModel):
+    reminder_at: str = Field(min_length=8, max_length=32)
+
+
+class CalendarPreviewRequest(BaseModel):
+    task_id: int
+    title: Optional[str] = Field(default=None, max_length=200)
+    start_date: Optional[str] = Field(default=None, max_length=32)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CalendarConfirmRequest(BaseModel):
+    draft_id: str = Field(min_length=4, max_length=80)
 
 
 class TopicCreate(BaseModel):

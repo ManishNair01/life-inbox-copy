@@ -763,6 +763,27 @@ function renderTask(task) {
       }),
       actionButton('Dismiss', 'secondary', () => {
         transitionTask(task.id, 'dismiss', actions);
+      }),
+      actionButton('Snooze 1 day', 'secondary', async () => {
+        const until = new Date();
+        until.setUTCDate(until.getUTCDate() + 1);
+        const iso = until.toISOString().slice(0, 10);
+        try {
+          await fetchJson(
+            `/api/tasks/${task.id}/snooze`,
+            {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({until: iso})
+            },
+            'Unable to snooze task.'
+          );
+          setStatus('taskStatus', `Snoozed until ${iso}.`);
+          await loadTasks();
+          await loadAttention();
+        } catch {
+          setStatus('taskStatus', 'Could not snooze task.', true);
+        }
       })
     );
     if (task.timing_text && !task.timing_confirmed) {
@@ -781,9 +802,17 @@ function renderTask(task) {
             setStatus('taskStatus', 'Timing confirmed.');
             await loadTasks();
             await loadDashboard();
+            await loadAttention();
           } catch {
             setStatus('taskStatus', 'Could not confirm timing.', true);
           }
+        })
+      );
+    }
+    if (task.timing_confirmed && (task.due_on || task.timing_text)) {
+      actions.append(
+        actionButton('Preview calendar', 'secondary', () => {
+          previewCalendarForTask(task);
         })
       );
     }
@@ -822,6 +851,7 @@ async function transitionTask(taskId, action, actions) {
     };
     setStatus('taskStatus', messages[action]);
     await loadTasks();
+    await loadAttention();
   } catch {
     setStatus(
       'taskStatus',
@@ -1228,12 +1258,120 @@ async function askInbox(event) {
   }
 }
 
+async function loadAttention() {
+  const briefingRoot = document.getElementById('briefing');
+  const attentionRoot = document.getElementById('attention');
+  try {
+    const [briefing, board] = await Promise.all([
+      fetchJson('/api/briefing', {}, 'Unable to load briefing.'),
+      fetchJson('/api/attention', {}, 'Unable to load attention board.')
+    ]);
+    briefingRoot.innerHTML = [
+      `<strong>Daily briefing</strong> · ${esc(briefing.reference_date)}`,
+      `<div>${esc(briefing.summary)}</div>`,
+      briefing.priority_suggestions.length
+        ? `<div class="provenance"><span class="label">Suggested focus</span>: ${
+            briefing.priority_suggestions
+              .map(item => `#${item.task_id} ${esc(item.text)} (${esc(item.reason)})`)
+              .join('; ')
+          }</div>`
+        : '<div class="muted">No timed open tasks yet.</div>'
+    ].join('');
+
+    const sections = [
+      ['overdue', 'Overdue'],
+      ['today', 'Today'],
+      ['upcoming', 'Upcoming'],
+      ['unscheduled', 'Unscheduled'],
+      ['snoozed', 'Snoozed']
+    ];
+    attentionRoot.replaceChildren();
+    for (const [key, label] of sections) {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      const items = board[key] || [];
+      panel.innerHTML = `<strong>${esc(label)}</strong> <span class="muted">(${items.length})</span>`;
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted';
+        empty.textContent = 'None';
+        panel.appendChild(empty);
+      } else {
+        for (const item of items.slice(0, 8)) {
+          const row = document.createElement('div');
+          row.className = 'task-meta';
+          const phrase = item.original_timing_phrase
+            ? ` · “${item.original_timing_phrase}”`
+            : '';
+          const due = item.normalized_due_on ? ` → ${item.normalized_due_on}` : '';
+          const conf = item.due_confidence ? ` · ${item.due_confidence}` : '';
+          const needs = item.needs_confirmation ? ' · needs confirmation' : '';
+          row.textContent = `#${item.id} ${item.text}${phrase}${due}${conf}${needs}`;
+          panel.appendChild(row);
+        }
+      }
+      attentionRoot.appendChild(panel);
+    }
+    setStatus('briefingStatus', 'Attention board updated.');
+  } catch {
+    setStatus('briefingStatus', 'Could not load attention board.', true);
+  }
+}
+
+async function previewCalendarForTask(task) {
+  setStatus('calendarStatus', 'Building calendar preview…');
+  try {
+    const preview = await fetchJson(
+      '/api/calendar/preview',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({task_id: task.id})
+      },
+      'Unable to preview calendar event.'
+    );
+    const root = document.getElementById('calendarPreview');
+    root.innerHTML = [
+      `<strong>Calendar preview</strong> (${esc(preview.provider)} / ${esc(preview.status)})`,
+      `<div>${esc(preview.title)} · ${esc(preview.start_date)} (${esc(preview.timezone)})</div>`,
+      `<div class="provenance">${(preview.notes || []).map(note => esc(note)).join(' · ')}</div>`
+    ].join('');
+    const confirmBtn = actionButton('Confirm (mock only)', '', async () => {
+      try {
+        const confirmed = await fetchJson(
+          '/api/calendar/confirm',
+          {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({draft_id: preview.draft_id})
+          },
+          'Unable to confirm calendar action.'
+        );
+        setStatus(
+          'calendarStatus',
+          confirmed.status === 'confirmed_mock'
+            ? 'Mock calendar confirmation recorded. No external event created.'
+            : `Calendar action status: ${confirmed.status}`
+        );
+        root.innerHTML += `<div class="provenance"><span class="label">Receipt</span>: ${esc(confirmed.status)} / ${esc(confirmed.provider)}</div>`;
+      } catch (error) {
+        setStatus('calendarStatus', error.message || 'Calendar confirm blocked or failed.', true);
+      }
+    });
+    root.appendChild(confirmBtn);
+    setStatus('calendarStatus', 'Preview ready — confirm explicitly to record a mock receipt.');
+  } catch (error) {
+    setStatus('calendarStatus', error.message || 'Calendar preview failed.', true);
+  }
+}
+
 syncControlsFromUrl();
 loadNotes();
 loadLatestAnalysis();
 loadTasks();
 loadTopics();
 loadDashboard();
+loadAttention();
 
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();

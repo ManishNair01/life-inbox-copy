@@ -81,6 +81,16 @@ Open http://127.0.0.1:8000
 - [ ] Analyze inbox includes ready URL items
 - [ ] Private/local URLs (127.0.0.1, localhost) rejected before fetch
 
+## Attention / Calendar smoke (Milestone 5+)
+
+- [ ] After analysis, Attention section shows Today / Upcoming / Overdue / Unscheduled
+- [ ] Daily briefing summary and suggested focus appear
+- [ ] Confirm date on a timed task; original phrase preserved; due_on normalized
+- [ ] Snooze 1 day moves task into Snoozed bucket
+- [ ] Preview calendar shows provider notes and requires explicit confirm
+- [ ] Confirm (mock) records a local receipt; `/api/calendar/status` shows writes_enabled=false
+- [ ] With `LIFE_INBOX_CALENDAR_PROVIDER=google`, confirm returns blocked (no OAuth/writes)
+
 ## Error states
 
 - [ ] Stop the server mid-request → friendly client error, text preserved in textarea

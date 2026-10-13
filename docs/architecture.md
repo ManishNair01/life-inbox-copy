@@ -19,6 +19,8 @@
 | `app/organizer.py` | OpenAI + fallback organization |
 | `app/capture/` | Rich capture (URL, PDF, image, voice, lifecycle) |
 | `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
+| `app/attention/` | Timing parse, attention buckets, briefing helpers |
+| `app/integrations/` | Replaceable Calendar adapter (mock / preview-only Google) |
 | `app/templates` / `app/static` | Browser UI |
 
 ## Data model (current)
@@ -71,7 +73,18 @@ OCR/vision/transcription adapters degrade gracefully when not configured
 - Insufficient evidence returns an explicit “not enough information” response (no fabrication)
 - Semantic layer is local TF-IDF cosine similarity (no vector database, no paid API in tests)
 
+## Attention & safe actions
+
+- Timing phrases stay on tasks (`timing_text` / `ai_timing_text`); normalized
+  `due_on` + `due_confidence` power Today/Upcoming/Overdue/Unscheduled views.
+- Ambiguous timing sets `needs_confirmation` until the user confirms.
+- Snooze / reminder fields are local only (`snoozed_until`, `reminder_at`).
+- Calendar: `GET /api/calendar/status`, `POST /api/calendar/preview`,
+  `POST /api/calendar/confirm`. Mock confirm stores a local receipt.
+  Google provider is preview-only; confirm is blocked (no OAuth / no writes).
+
 ## External services
 
 Automated tests mock OpenAI and must not call paid APIs. Live calls are for
-explicit manual smoke testing only.
+explicit manual smoke testing only. Never enable real Calendar OAuth/writes
+without owner approval.

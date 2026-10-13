@@ -52,6 +52,8 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Organization / AI in `app/organizer.py`
 - Rich capture in `app/capture/` (`POST /api/items/url`, `/pdf`, `/image`, `/voice`)
 - Retrieval / Ask in `app/retrieval/` (`GET /api/search`, `POST /api/ask`)
+- Attention / reminders in `app/attention/` (`GET /api/attention`, `/api/briefing`)
+- Calendar adapter in `app/integrations/calendar.py` (preview + mock confirm only)
 - Browser UI: `app/templates/index.html`, `app/static/*`
 - Canonical API: `/api/items`, `/api/analyze`, `/api/tasks`
 - Deprecated adapter: `/api/notes`

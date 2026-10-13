@@ -201,10 +201,31 @@ class TaskRecord(Base):
     timing_text = Column(Text, nullable=True)
     ai_timing_text = Column(Text, nullable=True)
     timing_confirmed = Column(Integer, nullable=False, default=0)
+    due_on = Column(Text, nullable=True)
+    due_confidence = Column(Text, nullable=True)
+    snoozed_until = Column(Text, nullable=True)
+    reminder_at = Column(Text, nullable=True)
     status = Column(Text, nullable=False)
     dedup_key = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=False)
+
+
+class CalendarActionReceiptRecord(Base):
+    __tablename__ = "calendar_action_receipts"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Text, nullable=False)
+    task_id = Column(
+        Integer,
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    provider = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
 
 
 class TaskSourceItemRecord(Base):
@@ -621,12 +642,17 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                         break
 
             if task is None:
+                from app.attention.dates import parse_timing_phrase
+
+                parsed_timing = parse_timing_phrase(todo.get("when"))
                 task = TaskRecord(
                     text=todo["task"],
                     priority=todo["priority"],
                     timing_text=todo["when"],
                     ai_timing_text=todo["when"],
                     timing_confirmed=0,
+                    due_on=parsed_timing.normalized_iso,
+                    due_confidence=parsed_timing.confidence,
                     status=TASK_OPEN,
                     dedup_key=dedup_key,
                     created_at=completed_at,
@@ -642,11 +668,16 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                         )
                     )
             else:
+                from app.attention.dates import parse_timing_phrase
+
                 task.text = todo["task"]
                 task.priority = todo["priority"]
                 task.ai_timing_text = todo["when"]
                 if not task.timing_confirmed:
                     task.timing_text = todo["when"]
+                    parsed_timing = parse_timing_phrase(todo.get("when"))
+                    task.due_on = parsed_timing.normalized_iso
+                    task.due_confidence = parsed_timing.confidence
                 task.dedup_key = dedup_key
                 task.updated_at = completed_at
                 linked = set(
@@ -768,7 +799,19 @@ def _task_dedup_key(source_item_ids: list[int], task_text: str = "") -> str:
     return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
 
 
+def _ensure_task_due_fields(task: TaskRecord) -> None:
+    """Normalize due_on from timing_text when missing."""
+    from app.attention.dates import parse_timing_phrase
+
+    if task.due_on and task.due_confidence:
+        return
+    parsed = parse_timing_phrase(task.timing_text)
+    task.due_on = parsed.normalized_iso
+    task.due_confidence = parsed.confidence
+
+
 def _task_to_dict(session, task: TaskRecord) -> dict:
+    _ensure_task_due_fields(task)
     source_item_ids = session.scalars(
         select(TaskSourceItemRecord.item_id)
         .where(TaskSourceItemRecord.task_id == task.id)
@@ -781,6 +824,10 @@ def _task_to_dict(session, task: TaskRecord) -> dict:
         "timing_text": task.timing_text,
         "ai_timing_text": task.ai_timing_text,
         "timing_confirmed": bool(task.timing_confirmed),
+        "due_on": task.due_on,
+        "due_confidence": task.due_confidence,
+        "snoozed_until": task.snoozed_until,
+        "reminder_at": task.reminder_at,
         "status": task.status,
         "source_item_ids": list(source_item_ids),
         "created_at": task.created_at,
@@ -1051,16 +1098,174 @@ def confirm_task_timing(
     task_id: int,
     timing_text: Optional[str] = None,
 ) -> Optional[dict]:
+    from app.attention.dates import parse_timing_phrase
+
     with SessionLocal() as session:
         task = session.get(TaskRecord, task_id)
         if task is None:
             return None
         if timing_text is not None:
             task.timing_text = timing_text
+        parsed = parse_timing_phrase(task.timing_text)
+        task.due_on = parsed.normalized_iso
+        task.due_confidence = "high" if parsed.due_date else parsed.confidence
         task.timing_confirmed = 1
         task.updated_at = datetime.now(timezone.utc).isoformat()
         session.commit()
         return _task_to_dict(session, task)
+
+
+def snooze_task_in_db(task_id: int, until_iso_date: str) -> Optional[dict]:
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+        task.snoozed_until = until_iso_date
+        task.reminder_at = until_iso_date
+        task.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _task_to_dict(session, task)
+
+
+def set_task_reminder_in_db(task_id: int, reminder_iso_date: str) -> Optional[dict]:
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+        task.reminder_at = reminder_iso_date
+        task.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _task_to_dict(session, task)
+
+
+def get_attention_board() -> dict:
+    from app.attention.dates import (
+        classify_attention_bucket,
+        parse_timing_phrase,
+        today_in_configured_tz,
+    )
+    from datetime import date as date_cls
+
+    today = today_in_configured_tz()
+    board = {
+        "today": [],
+        "upcoming": [],
+        "overdue": [],
+        "unscheduled": [],
+        "snoozed": [],
+        "needs_confirmation": [],
+        "reference_date": today.isoformat(),
+    }
+    for task in list_tasks_from_db(status_filter=TASK_OPEN):
+        parsed = parse_timing_phrase(task.get("timing_text"))
+        due = None
+        if task.get("due_on"):
+            try:
+                due = date_cls.fromisoformat(task["due_on"])
+            except ValueError:
+                due = parsed.due_date
+        else:
+            due = parsed.due_date
+        snoozed = None
+        if task.get("snoozed_until"):
+            try:
+                snoozed = date_cls.fromisoformat(task["snoozed_until"])
+            except ValueError:
+                snoozed = None
+        bucket = classify_attention_bucket(due, reference=today, snoozed_until=snoozed)
+        entry = {
+            **task,
+            "original_timing_phrase": task.get("timing_text"),
+            "normalized_due_on": due.isoformat() if due else None,
+            "due_confidence": task.get("due_confidence") or parsed.confidence,
+            "needs_confirmation": (
+                (not task.get("timing_confirmed"))
+                and parsed.needs_confirmation
+            ),
+            "attention_bucket": bucket,
+            "parse_note": parsed.note,
+        }
+        board[bucket].append(entry)
+        if entry["needs_confirmation"]:
+            board["needs_confirmation"].append(entry)
+    return board
+
+
+def get_daily_briefing() -> dict:
+    board = get_attention_board()
+    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
+    focus = sorted(
+        board["overdue"] + board["today"],
+        key=lambda item: (
+            priority_rank.get(item.get("priority"), 9),
+            item.get("normalized_due_on") or "9999",
+        ),
+    )
+    suggestions = []
+    for item in focus[:5]:
+        reason = []
+        if item["attention_bucket"] == "overdue":
+            reason.append("overdue")
+        if item["attention_bucket"] == "today":
+            reason.append("due today")
+        if item.get("priority") == "High":
+            reason.append("high priority")
+        suggestions.append(
+            {
+                "task_id": item["id"],
+                "text": item["text"],
+                "priority": item["priority"],
+                "reason": ", ".join(reason) or "on your attention list",
+            }
+        )
+    return {
+        "reference_date": board["reference_date"],
+        "counts": {
+            "overdue": len(board["overdue"]),
+            "today": len(board["today"]),
+            "upcoming": len(board["upcoming"]),
+            "unscheduled": len(board["unscheduled"]),
+            "snoozed": len(board["snoozed"]),
+            "needs_confirmation": len(board["needs_confirmation"]),
+        },
+        "focus": focus[:10],
+        "priority_suggestions": suggestions,
+        "summary": (
+            f"{len(board['overdue'])} overdue, {len(board['today'])} due today, "
+            f"{len(board['upcoming'])} upcoming."
+        ),
+    }
+
+
+def save_calendar_receipt(
+    *,
+    draft_id: str,
+    task_id: int,
+    provider: str,
+    status: str,
+    payload: dict,
+) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        receipt = CalendarActionReceiptRecord(
+            draft_id=draft_id,
+            task_id=task_id,
+            provider=provider,
+            status=status,
+            payload_json=json.dumps(payload),
+            created_at=now,
+        )
+        session.add(receipt)
+        session.commit()
+        return {
+            "id": receipt.id,
+            "draft_id": receipt.draft_id,
+            "task_id": receipt.task_id,
+            "provider": receipt.provider,
+            "status": receipt.status,
+            "payload": payload,
+            "created_at": receipt.created_at,
+        }
 
 
 def _topic_to_dict(topic: TopicRecord, item_count: int = 0) -> dict:

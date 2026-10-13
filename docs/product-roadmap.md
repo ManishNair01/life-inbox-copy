@@ -29,7 +29,7 @@ understand → organize → ready/failed.
 Keyword + lightweight semantic retrieval; citations; insufficient-evidence
 honesty; evaluation fixtures.
 
-## Milestone 5 — Attention, reminders, safe actions
+## Milestone 5 — Attention, reminders, safe actions (done)
 
 Deadline views; in-app reminders; optional Google Calendar behind an adapter
 with preview + explicit confirmation only.

@@ -38,6 +38,8 @@ from app.database import (
     dismiss_relation_in_db,
     fail_analysis_run,
     fail_item_processing,
+    get_attention_board,
+    get_daily_briefing,
     get_item_from_db,
     get_item_insight,
     get_latest_successful_analysis,
@@ -49,7 +51,10 @@ from app.database import (
     list_tasks_from_db,
     list_topics_from_db,
     mark_item_processing,
+    save_calendar_receipt,
+    set_task_reminder_in_db,
     set_task_status,
+    snooze_task_in_db,
     start_analysis_run,
     update_item_extracted_text,
     update_item_in_db,
@@ -57,10 +62,20 @@ from app.database import (
     update_note_in_db,
     update_topic_in_db,
 )
+from app.integrations.calendar import (
+    CalendarWriteBlockedError,
+    get_calendar_adapter,
+    get_draft,
+    store_draft,
+)
 from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    AskRequest,
+    AskResponse,
+    CalendarConfirmRequest,
+    CalendarPreviewRequest,
     ExtractedTextUpdate,
     InboxItem,
     InboxItemCreate,
@@ -73,15 +88,15 @@ from app.schemas import (
     NoteUpdate,
     PersistedAnalysis,
     Priority,
+    SearchHit,
     Task,
     TaskListStatus,
+    TaskReminderRequest,
+    TaskSnoozeRequest,
     TaskTimingConfirm,
     Topic,
     TopicCreate,
     TopicUpdate,
-    AskRequest,
-    AskResponse,
-    SearchHit,
     UrlItemCreate,
 )
 
@@ -706,6 +721,190 @@ def confirm_timing(task_id: int, payload: TaskTimingConfirm):
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found.")
     return task
+
+
+@app.post("/api/tasks/{task_id}/snooze", response_model=Task)
+def snooze_task(task_id: int, payload: TaskSnoozeRequest):
+    try:
+        task = snooze_task_in_db(task_id, payload.until.strip())
+    except Exception as exc:
+        logger.exception("Failed to snooze task")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to snooze task. Please try again.",
+        ) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
+
+
+@app.post("/api/tasks/{task_id}/reminder", response_model=Task)
+def set_task_reminder(task_id: int, payload: TaskReminderRequest):
+    try:
+        task = set_task_reminder_in_db(task_id, payload.reminder_at.strip())
+    except Exception as exc:
+        logger.exception("Failed to set reminder")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to set reminder. Please try again.",
+        ) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
+
+
+@app.get("/api/attention")
+def attention_board():
+    try:
+        return get_attention_board()
+    except Exception as exc:
+        logger.exception("Failed to load attention board")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load attention board. Please try again.",
+        ) from exc
+
+
+@app.get("/api/briefing")
+def daily_briefing():
+    try:
+        return get_daily_briefing()
+    except Exception as exc:
+        logger.exception("Failed to load daily briefing")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load daily briefing. Please try again.",
+        ) from exc
+
+
+@app.get("/api/calendar/status")
+def calendar_status():
+    adapter = get_calendar_adapter()
+    status = adapter.status()
+    return {
+        "provider": status.provider,
+        "configured": status.configured,
+        "oauth_connected": status.oauth_connected,
+        "writes_enabled": status.writes_enabled,
+        "mode": status.mode,
+        "message": status.message,
+    }
+
+
+@app.post("/api/calendar/preview")
+def calendar_preview(payload: CalendarPreviewRequest):
+    from datetime import date as date_cls
+
+    from app.attention.dates import configured_timezone, parse_timing_phrase
+
+    task = None
+    for candidate in list_tasks_from_db(status_filter="all"):
+        if candidate["id"] == payload.task_id:
+            task = candidate
+            break
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+
+    title = (payload.title or task["text"]).strip()
+    if payload.start_date:
+        try:
+            start = date_cls.fromisoformat(payload.start_date.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="start_date must be YYYY-MM-DD.",
+            ) from exc
+    elif task.get("due_on"):
+        start = date_cls.fromisoformat(task["due_on"])
+    else:
+        parsed = parse_timing_phrase(task.get("timing_text"))
+        if parsed.due_date is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Task has no normalized date. Confirm timing before "
+                    "previewing a calendar event."
+                ),
+            )
+        start = parsed.due_date
+
+    if not task.get("timing_confirmed"):
+        parsed = parse_timing_phrase(task.get("timing_text"))
+        if parsed.needs_confirmation:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Confirm the task date before creating a calendar preview. "
+                    "Ambiguous timing requires explicit confirmation."
+                ),
+            )
+
+    adapter = get_calendar_adapter()
+    draft = adapter.preview_event(
+        task_id=task["id"],
+        title=title,
+        start_date=start,
+        description=payload.description or "",
+        timezone_name=str(configured_timezone()),
+    )
+    store_draft(draft)
+    return {
+        "draft_id": draft.draft_id,
+        "task_id": draft.task_id,
+        "title": draft.title,
+        "start_date": draft.start_date,
+        "end_date": draft.end_date,
+        "description": draft.description,
+        "timezone": draft.timezone_name,
+        "provider": draft.provider,
+        "status": draft.status,
+        "confirmation_required": draft.confirmation_required,
+        "notes": draft.notes,
+    }
+
+
+@app.post("/api/calendar/confirm")
+def calendar_confirm(payload: CalendarConfirmRequest):
+    draft = get_draft(payload.draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Calendar draft not found. Create a preview first.",
+        )
+    adapter = get_calendar_adapter()
+    try:
+        confirmed = adapter.confirm_event(draft)
+    except CalendarWriteBlockedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Calendar confirm failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to confirm calendar action.",
+        ) from exc
+
+    store_draft(confirmed)
+    receipt = save_calendar_receipt(
+        draft_id=confirmed.draft_id,
+        task_id=confirmed.task_id,
+        provider=confirmed.provider,
+        status=confirmed.status,
+        payload={
+            "title": confirmed.title,
+            "start_date": confirmed.start_date,
+            "end_date": confirmed.end_date,
+            "timezone": confirmed.timezone_name,
+            "notes": confirmed.notes,
+        },
+    )
+    return {
+        "draft_id": confirmed.draft_id,
+        "task_id": confirmed.task_id,
+        "status": confirmed.status,
+        "provider": confirmed.provider,
+        "notes": confirmed.notes,
+        "receipt": receipt,
+    }
 
 
 @app.get("/api/topics", response_model=List[Topic])

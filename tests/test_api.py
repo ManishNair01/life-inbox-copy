@@ -1642,3 +1642,130 @@ def test_voice_transcript_is_editable_and_analyzable(client, monkeypatch):
         for note in bucket["notes"]
     }
     assert updated["id"] in ids
+
+
+def test_attention_board_buckets_and_briefing(client):
+    client.post(
+        "/api/items",
+        json={"raw_text": "Pay the electricity bill tomorrow and renew insurance next Monday"},
+    )
+    analysis = client.post("/api/analyze").json()
+    assert analysis["todos"]
+
+    board = client.get("/api/attention").json()
+    assert "today" in board and "upcoming" in board and "overdue" in board
+    assert "unscheduled" in board
+    assert board["reference_date"]
+
+    briefing = client.get("/api/briefing").json()
+    assert "summary" in briefing
+    assert "counts" in briefing
+    assert "priority_suggestions" in briefing
+
+
+def test_snooze_and_calendar_preview_confirm_mock(client, monkeypatch):
+    from app.integrations import calendar as calendar_mod
+
+    calendar_mod.reset_calendar_adapter_for_tests()
+    monkeypatch.setenv("LIFE_INBOX_CALENDAR_PROVIDER", "mock")
+
+    client.post(
+        "/api/items",
+        json={"raw_text": "Submit tax filing tomorrow morning"},
+    )
+    client.post("/api/analyze")
+    tasks = client.get("/api/tasks").json()
+    assert tasks
+    task = tasks[0]
+
+    confirmed = client.post(
+        f"/api/tasks/{task['id']}/confirm-timing",
+        json={"timing_text": "tomorrow"},
+    ).json()
+    assert confirmed["timing_confirmed"] is True
+    assert confirmed["due_on"]
+
+    snoozed = client.post(
+        f"/api/tasks/{task['id']}/snooze",
+        json={"until": "2099-01-01"},
+    ).json()
+    assert snoozed["snoozed_until"] == "2099-01-01"
+
+    # Unsnooze-ish by confirming again for calendar path
+    client.post(
+        f"/api/tasks/{task['id']}/confirm-timing",
+        json={"timing_text": "2026-12-01"},
+    )
+    # Clear snooze for attention by setting past snooze
+    client.post(
+        f"/api/tasks/{task['id']}/snooze",
+        json={"until": "2000-01-01"},
+    )
+
+    status = client.get("/api/calendar/status").json()
+    assert status["writes_enabled"] is False
+    assert status["oauth_connected"] is False
+
+    preview = client.post(
+        "/api/calendar/preview",
+        json={"task_id": task["id"]},
+    ).json()
+    assert preview["status"] == "preview"
+    assert preview["confirmation_required"] is True
+    assert "draft_id" in preview
+
+    confirmed_cal = client.post(
+        "/api/calendar/confirm",
+        json={"draft_id": preview["draft_id"]},
+    ).json()
+    assert confirmed_cal["status"] == "confirmed_mock"
+    assert confirmed_cal["receipt"]["provider"] == "mock"
+
+
+def test_google_calendar_confirm_is_blocked(client, monkeypatch):
+    from app.integrations import calendar as calendar_mod
+
+    calendar_mod.reset_calendar_adapter_for_tests()
+    monkeypatch.setenv("LIFE_INBOX_CALENDAR_PROVIDER", "google")
+
+    client.post(
+        "/api/items",
+        json={"raw_text": "Need to schedule dentist appointment on 2026-11-15"},
+    )
+    analysis = client.post("/api/analyze").json()
+    tasks = client.get("/api/tasks").json()
+    if not tasks:
+        # Fallback organizer may omit todos for short notes; seed via timing confirm path
+        # by re-analyzing a clearer action note.
+        client.post(
+            "/api/items",
+            json={"raw_text": "TODO: Book dentist appointment for 2026-11-15"},
+        )
+        client.post("/api/analyze")
+        tasks = client.get("/api/tasks").json()
+    assert tasks, analysis
+    task = tasks[0]
+    client.post(
+        f"/api/tasks/{task['id']}/confirm-timing",
+        json={"timing_text": "2026-11-15"},
+    )
+    preview = client.post(
+        "/api/calendar/preview",
+        json={"task_id": task["id"]},
+    ).json()
+    blocked = client.post(
+        "/api/calendar/confirm",
+        json={"draft_id": preview["draft_id"]},
+    )
+    assert blocked.status_code == 403
+    assert "disabled" in blocked.json()["detail"].lower()
+
+
+def test_parse_timing_preserves_original_phrase():
+    from app.attention.dates import parse_timing_phrase
+    from datetime import date
+
+    parsed = parse_timing_phrase("this weekend maybe", reference=date(2026, 10, 13))
+    assert parsed.original_phrase == "this weekend maybe"
+    assert parsed.due_date is not None
+    assert parsed.needs_confirmation is True

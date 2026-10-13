@@ -83,6 +83,18 @@
       <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
     </div>
 
+    <h2>Attention</h2>
+    <p class="sub">Today, upcoming, overdue, and unscheduled open tasks. Dates keep the original phrase and require confirmation when ambiguous.</p>
+    <p id="briefingStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="briefing" class="panel">
+      <span class="muted">Open tasks with timing appear here after analysis.</span>
+    </div>
+    <div id="attention" class="dashboard"></div>
+    <p id="calendarStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="calendarPreview" class="panel">
+      <span class="muted">Calendar previews require confirmation and never write to Google without owner approval.</span>
+    </div>
+
     <h2>Tasks</h2>
     <div class="task-toolbar">
       <label for="taskStatusFilter">Show</label>
