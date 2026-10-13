@@ -199,6 +199,44 @@ async function addNote() {
   }
 }
 
+async function addUrl() {
+  const input = document.getElementById('urlText');
+  const url = input.value.trim();
+  if (!url) {
+    setStatus('noteStatus', 'Paste a URL before saving.', true);
+    input.focus();
+    return;
+  }
+  setButtonBusy('addUrlButton', true, 'Saving…', 'Save URL');
+  setStatus('noteStatus', 'Saving URL and fetching article text…');
+  try {
+    const item = await fetchJson(
+      '/api/items/url',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url})
+      },
+      'Unable to save URL.'
+    );
+    if (input.value.trim() === url) input.value = '';
+    setStatus(
+      'noteStatus',
+      item.processing_status === 'ready'
+        ? 'URL saved and processed.'
+        : `URL saved but processing failed: ${item.error_message || 'unknown error'}`,
+      item.processing_status !== 'ready'
+    );
+    await loadNotes();
+    await loadLatestAnalysis();
+    await loadDashboard();
+  } catch {
+    setStatus('noteStatus', 'We could not save that URL.', true);
+  } finally {
+    setButtonBusy('addUrlButton', false, 'Saving…', 'Save URL');
+  }
+}
+
 function esc(str) {
   return String(str ?? '').replace(/[&<>'"]/g, tag => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
@@ -221,23 +259,62 @@ function renderNote(note) {
 
   const text = document.createElement('div');
   text.className = 'note-text';
-  text.textContent = note.raw_text;
+  if (note.item_type === 'url') {
+    const title = note.title || note.source_url || 'Saved URL';
+    const body = note.extracted_text || note.raw_text || '';
+    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.source_url || '')}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
+  } else {
+    text.textContent = note.raw_text;
+  }
 
   const time = document.createElement('div');
   time.className = 'time';
-  time.textContent = `#${note.id} · ${note.created_at}`;
+  const status = note.processing_status ? ` · ${note.processing_status}` : '';
+  const error = note.error_message ? ` · ${note.error_message}` : '';
+  time.textContent = `#${note.id} · ${note.item_type}${status}${error} · ${note.created_at}`;
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
 
-  const editButton = actionButton('Edit', 'secondary', () => {
-    showEditNote(note, root);
-  });
-  const deleteButton = actionButton('Delete', 'danger', () => {
-    deleteExistingNote(note, root, editButton, deleteButton);
-  });
+  if (note.item_type === 'text') {
+    const editButton = actionButton('Edit', 'secondary', () => {
+      showEditNote(note, root);
+    });
+    const deleteButton = actionButton('Delete', 'danger', () => {
+      deleteExistingNote(note, root, editButton, deleteButton);
+    });
+    actions.append(editButton, deleteButton);
+  } else if (note.item_type === 'url' && note.processing_status === 'failed') {
+    actions.append(
+      actionButton('Retry', '', async () => {
+        try {
+          const updated = await fetchJson(
+            `/api/items/${note.id}/retry`,
+            {method: 'POST'},
+            'Unable to retry URL processing.'
+          );
+          root.replaceWith(renderNote(updated));
+          setStatus('noteStatus', updated.processing_status === 'ready' ? 'URL processed.' : 'URL still failed.');
+          await loadLatestAnalysis();
+          await loadDashboard();
+        } catch {
+          setStatus('noteStatus', 'Retry failed.', true);
+        }
+      })
+    );
+    actions.append(
+      actionButton('Delete', 'danger', () => {
+        deleteExistingNote(note, root, null, null);
+      })
+    );
+  } else {
+    actions.append(
+      actionButton('Delete', 'danger', () => {
+        deleteExistingNote(note, root, null, null);
+      })
+    );
+  }
 
-  actions.append(editButton, deleteButton);
   root.append(text, time, actions);
   return root;
 }
@@ -310,14 +387,16 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
   if (pendingNoteActions.has(note.id)) return;
 
   const confirmed = window.confirm(
-    'Delete this note? This action cannot be undone.'
+    'Delete this item? This action cannot be undone.'
   );
   if (!confirmed) return;
 
   pendingNoteActions.add(note.id);
-  editButton.disabled = true;
-  deleteButton.disabled = true;
-  deleteButton.textContent = 'Deleting…';
+  if (editButton) editButton.disabled = true;
+  if (deleteButton) {
+    deleteButton.disabled = true;
+    deleteButton.textContent = 'Deleting…';
+  }
   setStatus('noteStatus', 'Deleting note…');
 
   try {
@@ -336,9 +415,11 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
       'We could not delete this note. It is still here—please try again.',
       true
     );
-    editButton.disabled = false;
-    deleteButton.disabled = false;
-    deleteButton.textContent = 'Delete';
+    if (editButton) editButton.disabled = false;
+    if (deleteButton) {
+      deleteButton.disabled = false;
+      deleteButton.textContent = 'Delete';
+    }
   } finally {
     pendingNoteActions.delete(note.id);
   }

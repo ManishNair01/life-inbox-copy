@@ -36,6 +36,14 @@ Open http://127.0.0.1:8000
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
 - [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
 
+## URL capture smoke (Milestone 3A+)
+
+- [ ] Paste a public https URL → item appears with `item_type=url`
+- [ ] Processing reaches `ready` with title + extracted text (or `failed` with error)
+- [ ] Retry on failed URL succeeds when upstream recovers
+- [ ] Analyze inbox includes ready URL items
+- [ ] Private/local URLs (127.0.0.1, localhost) rejected before fetch
+
 ## Error states
 
 - [ ] Stop the server mid-request → friendly client error, text preserved in textarea

@@ -91,6 +91,9 @@ def test_create_and_list_canonical_text_item(client):
         "original_filename": None,
         "mime_type": None,
         "processing_status": "ready",
+        "error_message": None,
+        "storage_path": None,
+        "extracted_text": None,
         "created_at": item["created_at"],
         "updated_at": None,
     }
@@ -1219,3 +1222,108 @@ def test_dismiss_relation_is_reversible_action(client):
     ).json()
     assert dismissed["dismissed"] is True
     assert client.get("/api/relations").json() == []
+
+
+def test_url_capture_persists_before_processing_and_extracts_text(client, monkeypatch):
+    main = sys.modules["app.main"]
+    database = sys.modules["app.database"]
+    original_add = database.add_url_item_to_db
+
+    def slow_add(url):
+        item = original_add(url)
+        assert item["processing_status"] == "captured"
+        assert item["source_url"] == "https://example.com/article"
+        return item
+
+    def fake_fetch(url):
+        assert url == "https://example.com/article"
+        return {
+            "final_url": "https://example.com/article",
+            "title": "Sample OG Title",
+            "raw_text": "This is readable article text for Life Inbox URL capture tests.",
+            "mime_type": "text/html",
+            "status_code": 200,
+        }
+
+    monkeypatch.setattr(database, "add_url_item_to_db", slow_add)
+    monkeypatch.setattr(main, "fetch_url", fake_fetch)
+
+    response = client.post(
+        "/api/items/url",
+        json={"url": "https://example.com/article"},
+    )
+
+    assert response.status_code == 200
+    item = response.json()
+    assert item["item_type"] == "url"
+    assert item["processing_status"] == "ready"
+    assert item["title"] == "Sample OG Title"
+    assert "readable article text" in (item["extracted_text"] or "")
+
+
+def test_url_capture_blocks_private_network_targets(client):
+    response = client.post(
+        "/api/items/url",
+        json={"url": "http://127.0.0.1/private"},
+    )
+    assert response.status_code == 400
+    assert "not allowed" in response.json()["detail"].lower()
+
+
+def test_failed_url_capture_can_retry(client, monkeypatch):
+    main = sys.modules["app.main"]
+    attempts = {"count": 0}
+
+    def flaky_fetch(_url):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise ValueError("Upstream returned HTTP 503")
+        return {
+            "final_url": "https://example.com/article",
+            "title": "Recovered Article",
+            "raw_text": "Recovered text",
+            "mime_type": "text/html",
+            "status_code": 200,
+        }
+
+    monkeypatch.setattr(main, "fetch_url", flaky_fetch)
+
+    first = client.post(
+        "/api/items/url",
+        json={"url": "https://example.com/article"},
+    ).json()
+    assert first["processing_status"] == "failed"
+    assert "503" in (first["error_message"] or "")
+
+    retry = client.post(f"/api/items/{first['id']}/retry").json()
+    assert retry["processing_status"] == "ready"
+    assert retry["title"] == "Recovered Article"
+
+
+def test_analyze_includes_ready_url_items(client, monkeypatch):
+    main = sys.modules["app.main"]
+
+    monkeypatch.setattr(
+        main,
+        "fetch_url",
+        lambda _url: {
+            "final_url": "https://example.com/article",
+            "title": "Article about habits",
+            "raw_text": "Need to read this article about habits tomorrow.",
+            "mime_type": "text/html",
+            "status_code": 200,
+        },
+    )
+    url_item = client.post(
+        "/api/items/url",
+        json={"url": "https://example.com/article"},
+    ).json()
+    assert url_item["processing_status"] == "ready"
+
+    analysis = client.post("/api/analyze").json()
+    ids = {
+        note["id"]
+        for bucket in analysis["buckets"]
+        for note in bucket["notes"]
+    }
+    assert url_item["id"] in ids

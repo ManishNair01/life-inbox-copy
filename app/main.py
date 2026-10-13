@@ -6,16 +6,21 @@ from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.database import (
     add_item_to_db,
     add_note_to_db,
+    add_url_item_to_db,
     complete_analysis_run,
+    complete_url_item_processing,
     confirm_task_timing,
     create_topic_in_db,
     delete_item_from_db,
     delete_note_from_db,
     dismiss_relation_in_db,
     fail_analysis_run,
+    fail_item_processing,
+    get_item_from_db,
     get_item_insight,
     get_latest_successful_analysis,
     get_organization_dashboard,
@@ -25,6 +30,7 @@ from app.database import (
     list_relations_from_db,
     list_tasks_from_db,
     list_topics_from_db,
+    mark_item_processing,
     set_task_status,
     start_analysis_run,
     update_item_in_db,
@@ -51,6 +57,7 @@ from app.schemas import (
     Topic,
     TopicCreate,
     TopicUpdate,
+    UrlItemCreate,
 )
 
 
@@ -68,6 +75,39 @@ def health():
     return {"status": "ok"}
 
 
+def _process_url_item(item_id: int) -> dict:
+    mark_item_processing(item_id)
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    try:
+        fetched = fetch_url(item["source_url"])
+        processed = complete_url_item_processing(
+            item_id,
+            title=fetched["title"],
+            raw_text=fetched["raw_text"],
+            mime_type=fetched.get("mime_type"),
+            final_url=fetched.get("final_url"),
+        )
+        if processed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return processed
+    except ValueError as exc:
+        failed = fail_item_processing(item_id, str(exc))
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+    except Exception as exc:
+        logger.exception("URL processing failed")
+        failed = fail_item_processing(
+            item_id,
+            "Unable to fetch or extract this URL.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+
+
 @app.post("/api/items", response_model=InboxItem)
 def create_item(payload: InboxItemCreate):
     try:
@@ -78,6 +118,40 @@ def create_item(payload: InboxItemCreate):
             status_code=500,
             detail="Unable to save item. Please try again.",
         ) from exc
+
+
+@app.post("/api/items/url", response_model=InboxItem)
+def create_url_item(payload: UrlItemCreate):
+    try:
+        url = validate_public_http_url(payload.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        item = add_url_item_to_db(url)
+    except Exception as exc:
+        logger.exception("Failed to save URL item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save URL. Please try again.",
+        ) from exc
+
+    return _process_url_item(item["id"])
+
+
+@app.post("/api/items/{item_id}/retry", response_model=InboxItem)
+def retry_item_processing(item_id: int):
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    if item["item_type"] != "url":
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed or pending URL items can be retried here.",
+        )
+    if item["processing_status"] == "ready":
+        return item
+    return _process_url_item(item_id)
 
 
 @app.get("/api/items", response_model=List[InboxItem])

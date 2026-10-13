@@ -22,6 +22,15 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from app.capture.pipeline import (
+    ANALYZABLE_STATUSES,
+    ANALYZABLE_TYPES,
+    STATUS_CAPTURED,
+    STATUS_FAILED,
+    STATUS_PROCESSING,
+    STATUS_READY,
+    URL_ITEM_TYPE,
+)
 from app.similarity import find_item_relations
 
 
@@ -54,7 +63,7 @@ def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
 
 
 TEXT_ITEM_TYPE = "text"
-READY_STATUS = "ready"
+READY_STATUS = STATUS_READY
 ANALYSIS_RUNNING = "running"
 ANALYSIS_SUCCEEDED = "succeeded"
 ANALYSIS_FAILED = "failed"
@@ -76,6 +85,9 @@ class InboxItemRecord(Base):
     original_filename = Column(Text, nullable=True)
     mime_type = Column(Text, nullable=True)
     processing_status = Column(Text, nullable=False)
+    error_message = Column(Text, nullable=True)
+    storage_path = Column(Text, nullable=True)
+    extracted_text = Column(Text, nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
 
@@ -259,6 +271,9 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "original_filename": item.original_filename,
         "mime_type": item.mime_type,
         "processing_status": item.processing_status,
+        "error_message": item.error_message,
+        "storage_path": item.storage_path,
+        "extracted_text": item.extracted_text,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -436,11 +451,24 @@ def add_note_to_db(text: str) -> dict:
 
 
 def list_notes_from_db() -> list[dict]:
-    return [
-        _item_to_note(item)
-        for item in list_items_from_db(limit=None, offset=0)
-        if item["item_type"] == TEXT_ITEM_TYPE
-    ]
+    """Analyzable ready items exposed in the legacy note shape for the organizer."""
+    notes = []
+    for item in list_items_from_db(limit=None, offset=0):
+        if item["item_type"] not in ANALYZABLE_TYPES:
+            continue
+        if item["processing_status"] not in ANALYZABLE_STATUSES:
+            continue
+        text = item.get("extracted_text") or item.get("raw_text")
+        if not text:
+            continue
+        notes.append(
+            {
+                "id": item["id"],
+                "text": text,
+                "created_at": item["created_at"],
+            }
+        )
+    return notes
 
 
 def update_note_in_db(note_id: int, text: str) -> Optional[dict]:
@@ -769,6 +797,78 @@ def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
             task.updated_at = datetime.now(timezone.utc).isoformat()
             session.commit()
         return _task_to_dict(session, task)
+
+
+def add_url_item_to_db(url: str) -> dict:
+    """Persist URL first (captured), then return the row for processing."""
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = InboxItemRecord(
+            item_type=URL_ITEM_TYPE,
+            source_url=url,
+            processing_status=STATUS_CAPTURED,
+            created_at=now,
+        )
+        session.add(item)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def mark_item_processing(item_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.processing_status = STATUS_PROCESSING
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def complete_url_item_processing(
+    item_id: int,
+    *,
+    title: str,
+    raw_text: str,
+    mime_type: Optional[str],
+    final_url: Optional[str] = None,
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.title = title
+        item.raw_text = raw_text
+        item.extracted_text = raw_text
+        item.mime_type = mime_type
+        if final_url:
+            item.source_url = final_url
+        item.processing_status = STATUS_READY
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def fail_item_processing(item_id: int, error_message: str) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.processing_status = STATUS_FAILED
+        item.error_message = error_message[:1000]
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def get_item_from_db(item_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        return _item_to_dict(item)
 
 
 def confirm_task_timing(

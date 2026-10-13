@@ -39,6 +39,9 @@ ul { padding-left: 22px; }
 .topic-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 8px 0; }
 .topic-form label { display: grid; gap: 5px; color: #555; font-size: 13px; }
 .topic-form input { min-width: 220px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
+.url-capture { display: grid; gap: 8px; margin-top: 12px; }
+.url-capture input { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+.url-capture button { margin: 0; }
 .topic { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; margin: 8px 0; }
 .topic strong { display: block; }
 .why { color: #555; font-size: 13px; margin-top: 6px; font-style: italic; }

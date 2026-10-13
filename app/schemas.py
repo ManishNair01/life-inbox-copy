@@ -62,8 +62,15 @@ class InboxItem(BaseModel):
     original_filename: Optional[str]
     mime_type: Optional[str]
     processing_status: str
+    error_message: Optional[str] = None
+    storage_path: Optional[str] = None
+    extracted_text: Optional[str] = None
     created_at: str
     updated_at: Optional[str]
+
+
+class UrlItemCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
 
 
 Priority = Literal["High", "Medium", "Low"]
