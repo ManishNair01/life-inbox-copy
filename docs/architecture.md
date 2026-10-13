@@ -18,6 +18,7 @@
 | `app/schemas.py` | Request/response and analysis contracts |
 | `app/organizer.py` | OpenAI + fallback organization |
 | `app/capture/` | Rich capture (URL fetch, PDF storage/extraction, lifecycle) |
+| `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
 | `app/templates` / `app/static` | Browser UI |
 
 ## Data model (current)
@@ -56,6 +57,13 @@ organize → ready/failed**.
 - Ready captures feed organization via `list_notes_from_db()` (uses `extracted_text`).
 
 Uploads default to `data/uploads/` (override with `LIFE_INBOX_UPLOAD_DIR`).
+
+## Retrieval + Ask My Inbox
+
+- `GET /api/search?q=` — ranked passages with keyword and semantic scores
+- `POST /api/ask` — extractive grounded answers with per-item citations
+- Insufficient evidence returns an explicit “not enough information” response (no fabrication)
+- Semantic layer is local TF-IDF cosine similarity (no vector database, no paid API in tests)
 
 ## External services
 

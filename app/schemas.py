@@ -254,3 +254,39 @@ class ItemRelation(BaseModel):
     score: float
     dismissed: bool
     created_at: str
+
+
+class SearchHit(BaseModel):
+    item_id: int
+    item_type: str
+    title: str
+    excerpt: str
+    source_kind: str
+    preview_url: Optional[str] = None
+    score: float
+    keyword_score: float
+    semantic_score: float
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=500)
+    item_type: Optional[str] = Field(default=None, max_length=100)
+
+
+class AskCitation(BaseModel):
+    id: str
+    item_id: int
+    item_type: str
+    title: str
+    excerpt: str
+    source_kind: str
+    preview_url: Optional[str] = None
+    score: float
+
+
+class AskResponse(BaseModel):
+    question: str
+    answer: str
+    confidence: Literal["high", "medium", "insufficient"]
+    citations: List[AskCitation]
+    answer_kind: Literal["grounded_summary", "model_generated"]

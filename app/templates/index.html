@@ -27,6 +27,25 @@
     <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
     <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
 
+    <h2>Ask My Inbox</h2>
+    <p class="sub">Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
+    <form id="askForm" class="ask-form" onsubmit="askInbox(event)">
+      <label>
+        Question
+        <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
+      </label>
+      <div class="ask-examples">
+        <button type="button" class="secondary" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
+        <button type="button" class="secondary" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
+        <button type="button" class="secondary" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+      </div>
+      <button type="submit" id="askButton">Ask</button>
+    </form>
+    <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="askOutput" class="panel ask-output">
+      <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
+    </div>
+
     <h2>Organized dashboard</h2>
     <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
     <div id="dashboard" class="dashboard">

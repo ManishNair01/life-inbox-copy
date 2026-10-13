@@ -43,6 +43,8 @@ from app.database import (
     update_topic_in_db,
 )
 from app.organizer import analyze_inbox_with_openai, validate_analysis_result
+from app.retrieval.ask import build_grounded_answer
+from app.retrieval.search import search_passages
 from app.schemas import (
     InboxItem,
     InboxItemCreate,
@@ -61,6 +63,9 @@ from app.schemas import (
     Topic,
     TopicCreate,
     TopicUpdate,
+    AskRequest,
+    AskResponse,
+    SearchHit,
     UrlItemCreate,
 )
 
@@ -567,6 +572,55 @@ def dismiss_relation(relation_id: int):
     if relation is None:
         raise HTTPException(status_code=404, detail="Relation not found.")
     return relation
+
+
+@app.get("/api/search", response_model=list[SearchHit])
+def search_inbox(
+    q: str = Query(..., min_length=1, max_length=200),
+    item_type: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(8, ge=1, le=25),
+):
+    try:
+        ranked = search_passages(
+            q,
+            limit=limit,
+            item_type=item_type,
+        )
+    except Exception as exc:
+        logger.exception("Search failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to search inbox. Please try again.",
+        ) from exc
+    return [
+        SearchHit(
+            item_id=row.passage.item_id,
+            item_type=row.passage.item_type,
+            title=row.passage.title,
+            excerpt=row.passage.passage[:320],
+            source_kind=row.passage.source_kind,
+            preview_url=row.passage.preview_url,
+            score=round(row.score, 4),
+            keyword_score=round(row.keyword_score, 4),
+            semantic_score=round(row.semantic_score, 4),
+        )
+        for row in ranked
+    ]
+
+
+@app.post("/api/ask", response_model=AskResponse)
+def ask_my_inbox(payload: AskRequest):
+    try:
+        return build_grounded_answer(
+            payload.question.strip(),
+            item_type=payload.item_type,
+        )
+    except Exception as exc:
+        logger.exception("Ask My Inbox failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to answer from your inbox. Please try again.",
+        ) from exc
 
 
 @app.get("/api/dashboard")

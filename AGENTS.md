@@ -51,6 +51,7 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Pydantic contracts in `app/schemas.py`
 - Organization / AI in `app/organizer.py`
 - Rich capture in `app/capture/` (`POST /api/items/url`, `POST /api/items/pdf`)
+- Retrieval / Ask in `app/retrieval/` (`GET /api/search`, `POST /api/ask`)
 - Browser UI: `app/templates/index.html`, `app/static/*`
 - Canonical API: `/api/items`, `/api/analyze`, `/api/tasks`
 - Deprecated adapter: `/api/notes`

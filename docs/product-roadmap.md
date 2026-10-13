@@ -24,7 +24,7 @@ understand → organize → ready/failed.
 - **3C** Images / screenshots (+ OCR adapter)
 - **3D** Voice notes (+ transcription adapter)
 
-## Milestone 4 — Retrieval + grounded “Ask My Inbox”
+## Milestone 4 — Retrieval + grounded “Ask My Inbox” (done)
 
 Keyword + lightweight semantic retrieval; citations; insufficient-evidence
 honesty; evaluation fixtures.

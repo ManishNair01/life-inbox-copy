@@ -36,6 +36,14 @@ Open http://127.0.0.1:8000
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
 - [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
 
+## Ask My Inbox smoke (Milestone 4+)
+
+- [ ] Save notes mentioning a specific topic (book, renewal, restaurant)
+- [ ] Ask a matching question → answer cites the correct item(s)
+- [ ] Ask an unrelated factual question → insufficient evidence message, no citations
+- [ ] Citation “Open source” opens URL or PDF preview where available
+- [ ] `GET /api/search?q=...` returns ranked excerpts
+
 ## PDF capture smoke (Milestone 3B+)
 
 - [ ] Choose a small text-based PDF → item appears with `item_type=pdf`

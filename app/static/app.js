@@ -926,6 +926,63 @@ async function loadDashboard() {
   }
 }
 
+function fillAskExample(text) {
+  const input = document.getElementById('askQuestion');
+  input.value = text;
+  input.focus();
+}
+
+function renderAskResponse(data) {
+  const root = document.getElementById('askOutput');
+  root.innerHTML = '';
+  const confidence = document.createElement('div');
+  confidence.className = 'confidence';
+  confidence.textContent = `Confidence: ${data.confidence} · ${data.answer_kind.replace('_', ' ')}`;
+  const answer = document.createElement('div');
+  answer.textContent = data.answer;
+  root.append(confidence, answer);
+  if (data.citations && data.citations.length) {
+    const heading = document.createElement('h3');
+    heading.textContent = 'Sources';
+    root.appendChild(heading);
+    for (const cite of data.citations) {
+      const block = document.createElement('div');
+      block.className = 'citation';
+      const link = cite.preview_url
+        ? `<a href="${esc(cite.preview_url)}" target="_blank" rel="noopener">Open source</a>`
+        : '';
+      block.innerHTML = `<strong>${esc(cite.title)}</strong> (#${cite.item_id} · ${esc(cite.source_kind)}) ${link}<div>${esc(cite.excerpt)}</div>`;
+      root.appendChild(block);
+    }
+  }
+}
+
+async function askInbox(event) {
+  event.preventDefault();
+  const input = document.getElementById('askQuestion');
+  const question = input.value.trim();
+  if (!question) return;
+  setButtonBusy('askButton', true, 'Thinking…', 'Ask');
+  setStatus('askStatus', 'Searching your inbox…');
+  try {
+    const data = await fetchJson(
+      '/api/ask',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({question})
+      },
+      'Unable to answer from your inbox.'
+    );
+    renderAskResponse(data);
+    setStatus('askStatus', data.confidence === 'insufficient' ? 'Not enough evidence in your inbox.' : 'Answer ready.');
+  } catch {
+    setStatus('askStatus', 'Ask My Inbox failed.', true);
+  } finally {
+    setButtonBusy('askButton', false, 'Thinking…', 'Ask');
+  }
+}
+
 syncControlsFromUrl();
 loadNotes();
 loadLatestAnalysis();

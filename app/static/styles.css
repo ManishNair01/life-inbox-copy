@@ -45,6 +45,11 @@ ul { padding-left: 22px; }
 .pdf-capture { display: grid; gap: 8px; margin-top: 12px; }
 .pdf-capture input[type="file"] { width: 100%; }
 .pdf-capture button { margin: 0; }
+.ask-form { display: grid; gap: 10px; margin: 12px 0; }
+.ask-form input { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+.ask-examples { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask-output .citation { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #4a7; background: #f7fbf8; border-radius: 6px; }
+.ask-output .confidence { font-size: 0.9rem; color: #555; margin-bottom: 8px; }
 .topic { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 14px; margin: 8px 0; }
 .topic strong { display: block; }
 .why { color: #555; font-size: 13px; margin-top: 6px; font-style: italic; }

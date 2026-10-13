@@ -6,7 +6,7 @@
 | 1 — Polished core | `milestone/1-polished-core` | `milestone-1` | Done |
 | 2 — Intelligent organization | `milestone/2-intelligent-organization` | `milestone-2` (pending) | In progress |
 | 3 — Rich capture (3A URL, 3B PDF) | `milestone/3-rich-capture` | `milestone-3a`, `milestone-3b` | 3B done |
-| 4 — Retrieval + Ask My Inbox | `milestone/4-retrieval-chat` | — | Not started |
+| 4 — Retrieval + Ask My Inbox | `milestone/4-retrieval-chat` | `milestone-4` | Done |
 | 5 — Attention / actions | `milestone/5-attention-actions` | — | Not started |
 | 6 — Deployable beta | `milestone/6-deployable-beta` | — | Not started |
 
