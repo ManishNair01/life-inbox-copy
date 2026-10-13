@@ -24,6 +24,20 @@
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button id="addPdfButton" type="button" class="secondary" onclick="addPdf()">Upload PDF</button>
     </div>
+    <div class="image-capture">
+      <label for="imageFile">Upload image / screenshot</label>
+      <input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" />
+      <button id="addImageButton" type="button" class="secondary" onclick="addImage()">Upload image</button>
+    </div>
+    <div class="voice-capture">
+      <label for="voiceFile">Voice note</label>
+      <div class="voice-actions">
+        <button id="recordVoiceButton" type="button" class="secondary" onclick="toggleVoiceRecording()">Record</button>
+        <input id="voiceFile" type="file" accept="audio/*,video/webm,.webm,.wav,.mp3,.m4a,.ogg" />
+        <button id="addVoiceButton" type="button" class="secondary" onclick="addVoice()">Upload audio</button>
+      </div>
+      <p id="voiceStatus" class="status muted" role="status" aria-live="polite"></p>
+    </div>
     <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
     <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
 
@@ -94,6 +108,8 @@
           <option value="text">Text</option>
           <option value="url">URL</option>
           <option value="pdf">PDF</option>
+          <option value="image">Image</option>
+          <option value="voice">Voice</option>
         </select>
       </label>
       <label>

@@ -17,7 +17,7 @@
 | `app/database.py` | Models, persistence helpers, fingerprints, task upsert |
 | `app/schemas.py` | Request/response and analysis contracts |
 | `app/organizer.py` | OpenAI + fallback organization |
-| `app/capture/` | Rich capture (URL fetch, PDF storage/extraction, lifecycle) |
+| `app/capture/` | Rich capture (URL, PDF, image, voice, lifecycle) |
 | `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
 | `app/templates` / `app/static` | Browser UI |
 
@@ -48,15 +48,21 @@ inbox has changed since that run.
 
 ## Rich capture lifecycle
 
-URL and PDF captures follow: **capture → save original → process → extract →
-organize → ready/failed**.
+URL, PDF, image, and voice captures follow: **capture → save original →
+process → extract → organize → ready/failed**.
 
 - Original sources are persisted before extraction (`source_url` or `storage_path`).
 - `processing_status`: `captured`, `processing`, `ready`, `failed`.
-- `POST /api/items/{id}/retry` re-runs processing for failed URL/PDF items.
+- `POST /api/items/{id}/retry` re-runs processing for failed capture items.
+- Images: OCR text in `extracted_text` (editable facts); AI copy in
+  `ai_description` (inferred). Thumbnails via `?variant=thumb`.
+- Voice: original audio retained; transcript in `extracted_text` (editable);
+  browser MediaRecorder upload supported when the mic is available.
 - Ready captures feed organization via `list_notes_from_db()` (uses `extracted_text`).
 
 Uploads default to `data/uploads/` (override with `LIFE_INBOX_UPLOAD_DIR`).
+OCR/vision/transcription adapters degrade gracefully when not configured
+(`LIFE_INBOX_DISABLE_OCR=1`, `LIFE_INBOX_DISABLE_TRANSCRIPTION=1` for tests).
 
 ## Retrieval + Ask My Inbox
 

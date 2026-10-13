@@ -29,8 +29,10 @@ from app.capture.pipeline import (
     STATUS_FAILED,
     STATUS_PROCESSING,
     STATUS_READY,
+    IMAGE_ITEM_TYPE,
     PDF_ITEM_TYPE,
     URL_ITEM_TYPE,
+    VOICE_ITEM_TYPE,
 )
 from app.capture.storage import delete_stored_file
 from app.similarity import find_item_relations
@@ -90,6 +92,7 @@ class InboxItemRecord(Base):
     error_message = Column(Text, nullable=True)
     storage_path = Column(Text, nullable=True)
     extracted_text = Column(Text, nullable=True)
+    ai_description = Column(Text, nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
 
@@ -276,6 +279,7 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "error_message": item.error_message,
         "storage_path": item.storage_path,
         "extracted_text": item.extracted_text,
+        "ai_description": item.ai_description,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -850,6 +854,122 @@ def complete_pdf_item_processing(
         item.mime_type = mime_type
         item.processing_status = STATUS_READY
         item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def add_image_item_to_db(
+    original_filename: str,
+    storage_path: str,
+    mime_type: str,
+) -> dict:
+    """Persist uploaded image metadata before OCR/description."""
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = InboxItemRecord(
+            item_type=IMAGE_ITEM_TYPE,
+            original_filename=original_filename,
+            storage_path=storage_path,
+            mime_type=mime_type,
+            processing_status=STATUS_CAPTURED,
+            created_at=now,
+        )
+        session.add(item)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def complete_image_item_processing(
+    item_id: int,
+    *,
+    title: str,
+    raw_text: str,
+    extracted_text: str,
+    ai_description: str,
+    mime_type: Optional[str],
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.title = title
+        item.raw_text = raw_text
+        item.extracted_text = extracted_text
+        item.ai_description = ai_description
+        item.mime_type = mime_type
+        item.processing_status = STATUS_READY
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def add_voice_item_to_db(
+    original_filename: str,
+    storage_path: str,
+    mime_type: str,
+) -> dict:
+    """Persist uploaded voice note metadata before transcription."""
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = InboxItemRecord(
+            item_type=VOICE_ITEM_TYPE,
+            original_filename=original_filename,
+            storage_path=storage_path,
+            mime_type=mime_type,
+            processing_status=STATUS_CAPTURED,
+            created_at=now,
+        )
+        session.add(item)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def complete_voice_item_processing(
+    item_id: int,
+    *,
+    title: str,
+    raw_text: str,
+    extracted_text: str,
+    mime_type: Optional[str],
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.title = title
+        item.raw_text = raw_text
+        item.extracted_text = extracted_text
+        item.mime_type = mime_type
+        item.processing_status = STATUS_READY
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
+
+
+def update_item_extracted_text(
+    item_id: int,
+    extracted_text: str,
+) -> Optional[dict]:
+    """User edit of extracted/OCR/transcript text (facts), preserving AI description."""
+    cleaned = extracted_text.strip()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        if item.item_type not in {IMAGE_ITEM_TYPE, VOICE_ITEM_TYPE, PDF_ITEM_TYPE}:
+            return None
+        item.extracted_text = cleaned
+        if item.item_type == IMAGE_ITEM_TYPE and item.ai_description:
+            item.raw_text = (
+                f"{cleaned}\n\n[AI description — inferred]\n{item.ai_description}"
+                if cleaned
+                else f"[AI description — inferred]\n{item.ai_description}"
+            )
+        else:
+            item.raw_text = cleaned
         item.updated_at = datetime.now(timezone.utc).isoformat()
         session.commit()
         return _item_to_dict(item)
