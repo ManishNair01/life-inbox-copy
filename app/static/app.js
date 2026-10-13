@@ -186,6 +186,7 @@ async function addNote() {
     await loadNotes(
       'Your note was saved, but the list could not refresh. Reload to try again.'
     );
+    await loadLatestAnalysis();
   } catch {
     setStatus(
       'noteStatus',
@@ -279,6 +280,7 @@ function showEditNote(note, root) {
       );
       root.replaceWith(renderNote(updatedNote));
       setStatus('noteStatus', 'Note updated.');
+      await loadLatestAnalysis();
     } catch {
       setStatus(
         'noteStatus',
@@ -326,6 +328,8 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
     );
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
+    await loadLatestAnalysis();
+    await loadTasks();
   } catch {
     setStatus(
       'noteStatus',
@@ -459,6 +463,9 @@ function renderAnalysis(data) {
   const generatedAt = data.generated_at
     ? new Date(data.generated_at).toLocaleString()
     : null;
+  const staleBanner = data.is_stale
+    ? `<div class="banner warn" role="status">Analysis is stale — inbox items changed since this run. Re-analyze to refresh.</div>`
+    : '';
 
   const bucketHtml = (data.buckets || []).map(bucket => `
     <div class="panel">
@@ -486,6 +493,7 @@ function renderAnalysis(data) {
   `).join('');
 
   root.innerHTML = `
+    ${staleBanner}
     ${generatedAt ? `<p class="muted"><strong>Generated:</strong> ${esc(generatedAt)}</p>` : ''}
 
     <h3>Buckets</h3>
@@ -515,7 +523,10 @@ async function loadLatestAnalysis() {
     const generatedAt = new Date(data.generated_at).toLocaleString();
     setStatus(
       'analysisStatus',
-      `Showing saved analysis generated ${generatedAt}.`
+      data.is_stale
+        ? `Saved analysis from ${generatedAt} is stale — re-analyze after inbox changes.`
+        : `Showing saved analysis generated ${generatedAt}.`,
+      Boolean(data.is_stale)
     );
   } catch {
     setStatus(
@@ -565,25 +576,45 @@ async function analyzeInbox() {
   }
 }
 
+const ITEM_PAGE_SIZE = 100;
+let loadedItemOffset = 0;
+let loadedItems = [];
+let hasMoreItems = false;
+
 async function loadNotes(
-  failureMessage = 'We could not load your notes. Reload to try again.'
+  failureMessage = 'We could not load your notes. Reload to try again.',
+  {append = false} = {}
 ) {
   const params = itemFilterParams();
-  const filtered = params.size > 0;
+  if (!append) {
+    loadedItemOffset = 0;
+    loadedItems = [];
+    hasMoreItems = false;
+  }
+  params.set('limit', String(ITEM_PAGE_SIZE));
+  params.set('offset', String(loadedItemOffset));
+  const filtered = [...params.keys()].some(
+    key => key !== 'limit' && key !== 'offset' && params.get(key)
+  );
   const query = params.toString();
   try {
     const notes = await fetchJson(
-      `/api/items${query ? `?${query}` : ''}`,
+      `/api/items?${query}`,
       undefined,
       'Unable to load notes.'
     );
     const root = document.getElementById('notes');
-    root.innerHTML = '';
+    if (!append) {
+      root.innerHTML = '';
+    } else {
+      const existingMore = document.getElementById('loadMoreItems');
+      if (existingMore) existingMore.remove();
+    }
 
-    if (!notes.length) {
+    if (!append && !notes.length) {
       root.innerHTML = filtered
         ? '<div class="panel muted">No inbox items match these filters.</div>'
-        : '<div class="panel muted">No saved notes yet.</div>';
+        : '<div class="panel muted">No saved notes yet. Capture a thought above to get started.</div>';
       setStatus(
         'searchStatus',
         filtered ? 'No results found.' : ''
@@ -591,14 +622,34 @@ async function loadNotes(
       return true;
     }
 
-    for (const note of notes.filter(item => item.item_type === 'text')) {
+    const textNotes = notes.filter(item => item.item_type === 'text');
+    loadedItems = append ? loadedItems.concat(textNotes) : textNotes;
+    loadedItemOffset += notes.length;
+    hasMoreItems = notes.length === ITEM_PAGE_SIZE;
+
+    for (const note of textNotes) {
       root.appendChild(renderNote(note));
     }
+
+    if (hasMoreItems) {
+      const more = document.createElement('button');
+      more.id = 'loadMoreItems';
+      more.type = 'button';
+      more.className = 'secondary';
+      more.textContent = 'Load more';
+      more.addEventListener('click', () => {
+        loadNotes(failureMessage, {append: true});
+      });
+      root.appendChild(more);
+    }
+
     setStatus(
       'searchStatus',
       filtered
-        ? `${notes.length} matching item${notes.length === 1 ? '' : 's'}.`
-        : ''
+        ? `${loadedItems.length}${hasMoreItems ? '+' : ''} matching item${loadedItems.length === 1 ? '' : 's'}.`
+        : hasMoreItems
+          ? `Showing ${loadedItems.length}+ items.`
+          : ''
     );
     return true;
   } catch {

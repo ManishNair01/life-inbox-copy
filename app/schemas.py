@@ -160,6 +160,8 @@ class AnalysisResult(StrictAnalysisModel):
 class PersistedAnalysis(AnalysisResult):
     analysis_run_id: int
     generated_at: str
+    is_stale: bool = False
+    inbox_fingerprint: Optional[str] = None
 
 
 TaskStatus = Literal["open", "completed", "dismissed"]

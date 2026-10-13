@@ -13,15 +13,20 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    event,
     or_,
     select,
 )
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "life_inbox.db"
 DEFAULT_DATABASE_URL = f"sqlite:///{DEFAULT_DB_PATH}"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+AUTO_CREATE_TABLES = os.getenv(
+    "LIFE_INBOX_AUTO_CREATE_TABLES", ""
+).strip().lower() in {"1", "true", "yes"}
 
 
 def _connect_args(database_url: str) -> dict:
@@ -33,6 +38,15 @@ def _connect_args(database_url: str) -> dict:
 engine = create_engine(DATABASE_URL, connect_args=_connect_args(DATABASE_URL))
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
+
+
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+    """SQLite only enforces CASCADE when foreign_keys pragma is on."""
+    if dbapi_connection.__class__.__module__.startswith("sqlite3"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 TEXT_ITEM_TYPE = "text"
@@ -137,8 +151,13 @@ class TaskSourceItemRecord(Base):
 
 
 def init_db():
-    """Create missing tables without running or applying Alembic migrations."""
-    Base.metadata.create_all(bind=engine)
+    """Prepare the DB connection.
+
+    Alembic owns schema evolution. Table auto-creation is opt-in for isolated
+    automated tests via LIFE_INBOX_AUTO_CREATE_TABLES=1.
+    """
+    if AUTO_CREATE_TABLES:
+        Base.metadata.create_all(bind=engine)
 
 
 def _item_to_dict(item: InboxItemRecord) -> dict:
@@ -176,7 +195,8 @@ def list_items_from_db(
     category: Optional[str] = None,
     priority: Optional[str] = None,
     processing_status: Optional[str] = None,
-    limit: int = 100,
+    limit: Optional[int] = 100,
+    offset: int = 0,
 ) -> list[dict]:
     with SessionLocal() as session:
         statement = select(InboxItemRecord)
@@ -218,10 +238,39 @@ def list_items_from_db(
                 InboxItemRecord.processing_status == processing_status
             )
 
-        items = session.scalars(
-            statement.order_by(InboxItemRecord.id.asc()).limit(limit)
-        ).all()
+        statement = statement.order_by(InboxItemRecord.id.asc()).offset(offset)
+        if limit is not None:
+            statement = statement.limit(limit)
+        items = session.scalars(statement).all()
         return [_item_to_dict(item) for item in items]
+
+
+def compute_inbox_fingerprint(session=None) -> str:
+    """Stable hash of current inbox content used to detect stale analysis."""
+
+    def _fingerprint(active_session) -> str:
+        items = active_session.scalars(
+            select(InboxItemRecord).order_by(InboxItemRecord.id.asc())
+        ).all()
+        payload = [
+            [
+                item.id,
+                item.item_type,
+                item.raw_text or "",
+                item.title or "",
+                item.source_url or "",
+                item.processing_status,
+                item.updated_at or item.created_at,
+            ]
+            for item in items
+        ]
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    if session is not None:
+        return _fingerprint(session)
+    with SessionLocal() as owned_session:
+        return _fingerprint(owned_session)
 
 
 def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
@@ -236,6 +285,40 @@ def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
         return _item_to_dict(item)
 
 
+def _remove_orphan_tasks(session, item_ids: list[int]) -> None:
+    """Drop source links for deleted items and remove tasks with no sources."""
+    if not item_ids:
+        return
+
+    affected_task_ids = session.scalars(
+        select(TaskSourceItemRecord.task_id).where(
+            TaskSourceItemRecord.item_id.in_(item_ids)
+        )
+    ).all()
+    for link in session.scalars(
+        select(TaskSourceItemRecord).where(
+            TaskSourceItemRecord.item_id.in_(item_ids)
+        )
+    ).all():
+        session.delete(link)
+    session.flush()
+
+    for task_id in sorted(set(affected_task_ids)):
+        remaining = session.scalars(
+            select(TaskSourceItemRecord.item_id).where(
+                TaskSourceItemRecord.task_id == task_id
+            )
+        ).all()
+        if remaining:
+            task = session.get(TaskRecord, task_id)
+            if task is not None:
+                task.dedup_key = _task_dedup_key(list(remaining))
+            continue
+        task = session.get(TaskRecord, task_id)
+        if task is not None:
+            session.delete(task)
+
+
 def delete_item_from_db(item_id: int) -> bool:
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
@@ -245,6 +328,7 @@ def delete_item_from_db(item_id: int) -> bool:
         insight = session.get(ItemInsightRecord, item_id)
         if insight is not None:
             session.delete(insight)
+        _remove_orphan_tasks(session, [item_id])
         session.delete(item)
         session.commit()
         return True
@@ -265,7 +349,7 @@ def add_note_to_db(text: str) -> dict:
 def list_notes_from_db() -> list[dict]:
     return [
         _item_to_note(item)
-        for item in list_items_from_db()
+        for item in list_items_from_db(limit=None, offset=0)
         if item["item_type"] == TEXT_ITEM_TYPE
     ]
 
@@ -402,17 +486,23 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     sorted(linked_source_ids)
                 )
 
+        fingerprint = compute_inbox_fingerprint(session)
+        persisted = {
+            **result,
+            "inbox_fingerprint": fingerprint,
+        }
         run.completed_at = completed_at
         run.status = ANALYSIS_SUCCEEDED
         run.mode = result["mode"]
-        run.result_json = json.dumps(result, ensure_ascii=False)
+        run.result_json = json.dumps(persisted, ensure_ascii=False)
         session.commit()
-
-    return {
-        **result,
-        "analysis_run_id": run_id,
-        "generated_at": completed_at,
-    }
+        return {
+            **result,
+            "analysis_run_id": run_id,
+            "generated_at": completed_at,
+            "is_stale": False,
+            "inbox_fingerprint": fingerprint,
+        }
 
 
 def fail_analysis_run(run_id: int) -> None:
@@ -441,10 +531,15 @@ def get_latest_successful_analysis() -> Optional[dict]:
         ).first()
         if run is None:
             return None
+        stored = json.loads(run.result_json)
+        fingerprint = stored.pop("inbox_fingerprint", None)
+        current = compute_inbox_fingerprint(session)
         return {
-            **json.loads(run.result_json),
+            **stored,
             "analysis_run_id": run.id,
             "generated_at": run.completed_at,
+            "is_stale": fingerprint != current,
+            "inbox_fingerprint": fingerprint,
         }
 
 

@@ -11,7 +11,13 @@ def analysis_without_metadata(data):
     return {
         key: value
         for key, value in data.items()
-        if key not in {"analysis_run_id", "generated_at"}
+        if key
+        not in {
+            "analysis_run_id",
+            "generated_at",
+            "is_stale",
+            "inbox_fingerprint",
+        }
     }
 
 
@@ -20,6 +26,7 @@ def client(tmp_path, monkeypatch):
     """Create an app client backed only by a per-test SQLite database."""
     test_db_path = tmp_path / "life_inbox_test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
+    monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     sys.modules.pop("app.database", None)
@@ -520,9 +527,10 @@ def test_successful_analysis_persists_run_and_item_insight(client):
         assert run.mode == "fallback_no_api_call"
         assert run.started_at
         assert run.completed_at == analysis["generated_at"]
-        assert json.loads(run.result_json) == analysis_without_metadata(
-            analysis
-        )
+        stored = json.loads(run.result_json)
+        assert stored.pop("inbox_fingerprint") == analysis["inbox_fingerprint"]
+        assert stored == analysis_without_metadata(analysis)
+        assert analysis["is_stale"] is False
         assert insight.analysis_run_id == run.id
         assert insight.category == "Work"
         assert insight.concise_title == "Call the team tomorrow"
@@ -1002,3 +1010,54 @@ def test_openai_failure_fallback_omits_technical_details(monkeypatch):
     assert result["mode"] == "fallback_after_api_error"
     assert "error" not in result
     assert "super-secret" not in repr(result)
+
+
+def test_item_list_supports_offset_and_raised_limit(client):
+    for number in range(5):
+        client.post(
+            "/api/items",
+            json={"raw_text": f"Paged item {number}"},
+        )
+
+    page = client.get("/api/items", params={"limit": 2, "offset": 2})
+
+    assert page.status_code == 200
+    assert [item["id"] for item in page.json()] == [3, 4]
+
+    oversized = client.get("/api/items", params={"limit": 501})
+    assert oversized.status_code == 422
+
+
+def test_analysis_marked_stale_after_inbox_changes(client):
+    client.post("/api/items", json={"raw_text": "Call the dentist tomorrow"})
+    first = client.post("/api/analyze").json()
+    assert first["is_stale"] is False
+    assert first["inbox_fingerprint"]
+
+    latest = client.get("/api/analyze/latest").json()
+    assert latest["is_stale"] is False
+    assert latest["inbox_fingerprint"] == first["inbox_fingerprint"]
+
+    client.post("/api/items", json={"raw_text": "Buy groceries this weekend"})
+    stale = client.get("/api/analyze/latest").json()
+    assert stale["is_stale"] is True
+    assert stale["analysis_run_id"] == first["analysis_run_id"]
+
+
+def test_deleting_item_removes_orphan_task(client):
+    created = client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    ).json()
+    client.post("/api/analyze")
+    assert len(client.get("/api/tasks").json()) == 1
+
+    delete_response = client.delete(f"/api/items/{created['id']}")
+    assert delete_response.status_code == 204
+    assert client.get("/api/tasks").json() == []
+
+    database = sys.modules["app.database"]
+    with database.SessionLocal() as session:
+        assert session.query(database.TaskRecord).count() == 0
+        assert session.query(database.TaskSourceItemRecord).count() == 0
+        assert session.query(database.ItemInsightRecord).count() == 0

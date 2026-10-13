@@ -71,7 +71,8 @@ def get_items(
     category: Optional[str] = Query(None, max_length=100),
     priority: Optional[Priority] = Query(None),
     processing_status: Optional[str] = Query(None, max_length=100),
-    limit: int = Query(100, ge=1, le=100),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     try:
         return list_items_from_db(
@@ -81,6 +82,7 @@ def get_items(
             priority=priority,
             processing_status=processing_status,
             limit=limit,
+            offset=offset,
         )
     except Exception as exc:
         logger.exception("Failed to load inbox items")

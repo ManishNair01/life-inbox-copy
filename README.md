@@ -68,6 +68,8 @@ python -m alembic current
 ```
 
 The application does not run Alembic migrations automatically at startup.
+Always `alembic upgrade head` against the target database before running the
+app.
 
 ### Canonical inbox-item model
 
@@ -82,9 +84,10 @@ Only `item_type="text"` is created or displayed in this version. File uploads,
 URLs, voice, and image inputs are not implemented.
 
 `GET /api/items` accepts optional `q`, `item_type`, `category`, `priority`,
-`processing_status`, and `limit` query parameters. Text search is
-case-insensitive and matches raw text or title. Category and priority filters
-use the latest saved analysis insights.
+`processing_status`, `limit` (1–500, default 100), and `offset` query
+parameters. Text search is case-insensitive and matches raw text or title.
+Category and priority filters use the latest saved analysis insights. The
+browser loads notes in pages of 100 with a “Load more” control.
 
 The `/api/notes` routes remain temporarily available as deprecated
 compatibility adapters. They read and write the same `inbox_items` records
@@ -101,8 +104,13 @@ concise title, and priority are stored in `item_insights`.
 
 `GET /api/analyze/latest` returns the latest successful result without calling
 OpenAI. The browser uses it on page load and displays when the result was
-generated. Failed runs are recorded separately and never replace the previous
-successful result or its item insights.
+generated. Each successful result stores an inbox content fingerprint; the API
+sets `is_stale` when items have changed since that run. Failed runs are
+recorded separately and never replace the previous successful result or its
+item insights.
+
+Schema evolution is owned by Alembic. The application does not create tables at
+startup unless `LIFE_INBOX_AUTO_CREATE_TABLES=1` (automated tests only).
 
 ### Persistent tasks
 
@@ -203,11 +211,18 @@ life-inbox/
 │       └── 0006_deduplicate_tasks_by_source.py
 ├── alembic.ini
 ├── data/
+├── docs/
+│   ├── architecture.md
+│   ├── manual-testing.md
+│   ├── milestone-status.md
+│   └── product-roadmap.md
 ├── scripts/seed_demo_notes.py
 ├── tests/
 │   ├── test_api.py
 │   └── test_migrations.py
 ├── reference/original_life_inbox_notebook.ipynb
+├── .github/workflows/ci.yml
+├── AGENTS.md
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
