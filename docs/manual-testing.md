@@ -100,10 +100,30 @@ Open http://127.0.0.1:8000
 - [ ] Confirm (mock) records a local receipt; `/api/calendar/status` shows writes_enabled=false
 - [ ] With `LIFE_INBOX_CALENDAR_PROVIDER=google`, confirm returns blocked (no OAuth/writes)
 
+## Pagination regression (delete + Load more)
+
+Automated coverage: `tests/test_pagination_state.py` (pure JS helper via Node).
+
+Browser procedure (temp DB only):
+
+1. Create notes “Pagination note 001” … “Pagination note 102” (102 notes).
+2. Reload http://127.0.0.1:8000 — first 100 appear; “Load more” visible.
+3. Delete “Pagination note 001”.
+4. Click “Load more”.
+5. Confirm notes 002–102 each appear exactly once (including 101); ID order.
+6. Rapid double-click “Load more” on a >200-note inbox — no duplicates/skips;
+   button disables while a list request is in flight.
+7. Force a failed append (stop server, click Load more) — friendly error;
+   already-displayed notes remain.
+8. Failed delete (stop server, delete) — note stays visible; pagination unchanged.
+9. Search / filters / Clear / create note / Back / Forward still reload from
+   offset 0. Editing a note does not skip or duplicate pages.
+
 ## Error states
 
 - [ ] Stop the server mid-request → friendly client error, text preserved in textarea
 - [ ] Analyze with empty inbox → empty_inbox mode, no crash
+- [ ] Failed “Load more” → friendly error; notes already on screen kept
 
 ## Do not
 

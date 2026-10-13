@@ -658,6 +658,7 @@ function showEditNote(note, root) {
         },
         'Unable to update note.'
       );
+      LifeInboxPagination.afterLoadedNoteUpdated(itemPagination, updatedNote);
       root.replaceWith(renderNote(updatedNote));
       setStatus('noteStatus', 'Note updated.');
       await loadLatestAnalysis();
@@ -708,6 +709,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
       {method: 'DELETE'},
       'Unable to delete note.'
     );
+    LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
     await loadLatestAnalysis();
@@ -1016,27 +1018,58 @@ async function analyzeInbox() {
   }
 }
 
-const ITEM_PAGE_SIZE = 100;
-let loadedItemOffset = 0;
-let loadedItems = [];
-let hasMoreItems = false;
+const itemPagination = LifeInboxPagination.createState(
+  LifeInboxPagination.PAGE_SIZE
+);
+
+function updateLoadMoreButton(failureMessage) {
+  const existingMore = document.getElementById('loadMoreItems');
+  if (existingMore) existingMore.remove();
+  if (!itemPagination.hasMore) return;
+
+  const root = document.getElementById('notes');
+  const more = document.createElement('button');
+  more.id = 'loadMoreItems';
+  more.type = 'button';
+  more.className = 'secondary';
+  more.textContent = itemPagination.listRequestInFlight
+    ? 'Loading…'
+    : 'Load more';
+  more.disabled = itemPagination.listRequestInFlight;
+  more.setAttribute(
+    'aria-busy',
+    String(itemPagination.listRequestInFlight)
+  );
+  more.addEventListener('click', () => {
+    if (itemPagination.listRequestInFlight) return;
+    loadNotes(failureMessage, {append: true});
+  });
+  root.appendChild(more);
+}
 
 async function loadNotes(
   failureMessage = 'We could not load your notes. Reload to try again.',
   {append = false} = {}
 ) {
+  if (!LifeInboxPagination.beginListRequest(itemPagination)) {
+    return false;
+  }
+
   const params = itemFilterParams();
   if (!append) {
-    loadedItemOffset = 0;
-    loadedItems = [];
-    hasMoreItems = false;
+    LifeInboxPagination.resetForReload(itemPagination);
   }
-  params.set('limit', String(ITEM_PAGE_SIZE));
-  params.set('offset', String(loadedItemOffset));
+  params.set('limit', String(itemPagination.pageSize));
+  params.set('offset', String(itemPagination.loadedOffset));
   const filtered = [...params.keys()].some(
     key => key !== 'limit' && key !== 'offset' && params.get(key)
   );
   const query = params.toString();
+
+  if (append) {
+    updateLoadMoreButton(failureMessage);
+  }
+
   try {
     const notes = await fetchJson(
       `/api/items?${query}`,
@@ -1062,38 +1095,39 @@ async function loadNotes(
       return true;
     }
 
-    const textNotes = notes.filter(item => item.item_type === 'text');
-    loadedItems = append ? loadedItems.concat(textNotes) : textNotes;
-    loadedItemOffset += notes.length;
-    hasMoreItems = notes.length === ITEM_PAGE_SIZE;
+    const {textNotes, hasMore} = LifeInboxPagination.applyFetchedPage(
+      itemPagination,
+      notes,
+      {append}
+    );
 
     for (const note of textNotes) {
       root.appendChild(renderNote(note));
     }
 
-    if (hasMoreItems) {
-      const more = document.createElement('button');
-      more.id = 'loadMoreItems';
-      more.type = 'button';
-      more.className = 'secondary';
-      more.textContent = 'Load more';
-      more.addEventListener('click', () => {
-        loadNotes(failureMessage, {append: true});
-      });
-      root.appendChild(more);
+    if (hasMore) {
+      updateLoadMoreButton(failureMessage);
     }
 
+    const loadedCount = itemPagination.loadedItems.length;
     setStatus(
       'searchStatus',
       filtered
-        ? `${loadedItems.length}${hasMoreItems ? '+' : ''} matching item${loadedItems.length === 1 ? '' : 's'}.`
-        : hasMoreItems
-          ? `Showing ${loadedItems.length}+ items.`
+        ? `${loadedCount}${hasMore ? '+' : ''} matching item${loadedCount === 1 ? '' : 's'}.`
+        : hasMore
+          ? `Showing ${loadedCount}+ items.`
           : ''
     );
     return true;
   } catch {
-    if (filtered) {
+    if (append) {
+      setStatus(
+        'noteStatus',
+        'We could not load more notes. Your current notes are still here—please try again.',
+        true
+      );
+      updateLoadMoreButton(failureMessage);
+    } else if (filtered) {
       setStatus(
         'searchStatus',
         'Search failed. Please try again.',
@@ -1103,6 +1137,11 @@ async function loadNotes(
       setStatus('noteStatus', failureMessage, true);
     }
     return false;
+  } finally {
+    LifeInboxPagination.endListRequest(itemPagination);
+    if (itemPagination.hasMore) {
+      updateLoadMoreButton(failureMessage);
+    }
   }
 }
 
