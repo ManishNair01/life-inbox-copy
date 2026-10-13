@@ -1546,3 +1546,99 @@ def test_analyze_includes_ready_image_items(client, monkeypatch):
         for note in bucket["notes"]
     }
     assert image_item["id"] in ids
+
+
+def test_voice_capture_persists_before_processing(client, monkeypatch):
+    from tests.voice_fixtures import make_wav_bytes
+
+    main = sys.modules["app.main"]
+    database = sys.modules["app.database"]
+    original_add = database.add_voice_item_to_db
+    wav = make_wav_bytes()
+    seen = {"persisted": False}
+
+    def slow_add(filename, storage_path, mime_type):
+        item = original_add(filename, storage_path, mime_type)
+        seen["persisted"] = True
+        assert item["original_filename"] == "note.wav"
+        assert item["processing_status"] == "captured"
+        assert item["storage_path"]
+        return item
+
+    monkeypatch.setattr(main, "add_voice_item_to_db", slow_add)
+    monkeypatch.setenv("LIFE_INBOX_DISABLE_TRANSCRIPTION", "1")
+
+    item = client.post(
+        "/api/items/voice",
+        files={"file": ("note.wav", wav, "audio/wav")},
+    ).json()
+
+    assert seen["persisted"] is True
+    assert item["item_type"] == "voice"
+    assert item["processing_status"] == "ready"
+    assert item["extracted_text"] == ""
+    assert "transcript pending" in (item["raw_text"] or "").lower()
+    audio = client.get(f"/api/items/{item['id']}/file")
+    assert audio.status_code == 200
+    assert audio.content.startswith(b"RIFF")
+
+
+def test_voice_capture_rejects_invalid_uploads(client):
+    response = client.post(
+        "/api/items/voice",
+        files={"file": ("notes.txt", b"not audio", "text/plain")},
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"].lower()
+    assert "audio" in detail or "voice" in detail or "webm" in detail
+
+
+def test_failed_voice_capture_can_retry(client, monkeypatch):
+    from tests.voice_fixtures import make_wav_bytes
+
+    main = sys.modules["app.main"]
+    real_process = main.process_voice_bytes
+    calls = {"n": 0}
+
+    def flaky_process(data, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("Temporary transcription failure")
+        return real_process(data, **kwargs)
+
+    monkeypatch.setattr(main, "process_voice_bytes", flaky_process)
+
+    first = client.post(
+        "/api/items/voice",
+        files={"file": ("note.wav", make_wav_bytes(), "audio/wav")},
+    ).json()
+    assert first["processing_status"] == "failed"
+
+    retry = client.post(f"/api/items/{first['id']}/retry").json()
+    assert retry["processing_status"] == "ready"
+
+
+def test_voice_transcript_is_editable_and_analyzable(client, monkeypatch):
+    from tests.voice_fixtures import make_wav_bytes
+
+    monkeypatch.setenv("LIFE_INBOX_DISABLE_TRANSCRIPTION", "1")
+    item = client.post(
+        "/api/items/voice",
+        files={"file": ("memo.wav", make_wav_bytes(), "audio/wav")},
+    ).json()
+    assert item["processing_status"] == "ready"
+
+    updated = client.patch(
+        f"/api/items/{item['id']}/extracted-text",
+        json={"extracted_text": "Remember to call the dentist tomorrow morning"},
+    ).json()
+    assert updated["extracted_text"].startswith("Remember to call")
+    assert "dentist" in updated["raw_text"]
+
+    analysis = client.post("/api/analyze").json()
+    ids = {
+        note["id"]
+        for bucket in analysis["buckets"]
+        for note in bucket["notes"]
+    }
+    assert updated["id"] in ids

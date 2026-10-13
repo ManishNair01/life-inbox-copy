@@ -11,20 +11,24 @@ from app.capture.pdf_extract import extract_pdf_text, validate_pdf_upload
 from app.capture.storage import (
     read_stored_bytes,
     resolve_storage_path,
+    store_audio_bytes,
     store_image_bytes,
     store_pdf_bytes,
     store_thumbnail_bytes,
     thumbnail_relative_path,
 )
 from app.capture.url_fetch import fetch_url, validate_public_http_url
+from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
 from app.database import (
     add_image_item_to_db,
     add_item_to_db,
     add_note_to_db,
     add_pdf_item_to_db,
     add_url_item_to_db,
+    add_voice_item_to_db,
     complete_image_item_processing,
     complete_pdf_item_processing,
+    complete_voice_item_processing,
     complete_analysis_run,
     complete_url_item_processing,
     confirm_task_timing,
@@ -229,6 +233,55 @@ def _process_image_item(item_id: int) -> dict:
         return failed
 
 
+def _process_voice_item(item_id: int) -> dict:
+    mark_item_processing(item_id)
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    storage_path = item.get("storage_path")
+    if not storage_path:
+        failed = fail_item_processing(item_id, "Stored audio file is missing.")
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    try:
+        data = read_stored_bytes(storage_path)
+        processed_payload = process_voice_bytes(
+            data,
+            original_filename=item.get("original_filename") or "voice-note.webm",
+            mime_type=item.get("mime_type") or "audio/webm",
+        )
+        processed = complete_voice_item_processing(
+            item_id,
+            title=processed_payload["title"],
+            raw_text=processed_payload["raw_text"],
+            extracted_text=processed_payload["extracted_text"],
+            mime_type=processed_payload.get("mime_type"),
+        )
+        if processed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return processed
+    except FileNotFoundError:
+        failed = fail_item_processing(item_id, "Stored audio file is missing.")
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    except ValueError as exc:
+        failed = fail_item_processing(item_id, str(exc))
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+    except Exception as exc:
+        logger.exception("Voice processing failed")
+        failed = fail_item_processing(
+            item_id,
+            "Unable to process this voice note.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+
+
 @app.post("/api/items", response_model=InboxItem)
 def create_item(payload: InboxItemCreate):
     try:
@@ -342,6 +395,58 @@ async def create_image_item(file: UploadFile = File(...)):
     return _process_image_item(item["id"])
 
 
+@app.post("/api/items/voice", response_model=InboxItem)
+async def create_voice_item(file: UploadFile = File(...)):
+    data = await file.read()
+    try:
+        safe_filename, detected_mime, extension = validate_audio_upload(
+            file.filename or "voice-note.webm",
+            file.content_type,
+            data,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        storage_path = store_audio_bytes(data, extension)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to store voice upload")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store voice note. Please try again.",
+        ) from exc
+
+    mime_type = detected_mime
+    if file.content_type:
+        declared = file.content_type.split(";", 1)[0].strip().lower()
+        if declared in {
+            "audio/webm",
+            "audio/wav",
+            "audio/x-wav",
+            "audio/wave",
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/mp4",
+            "audio/m4a",
+            "audio/x-m4a",
+            "audio/ogg",
+            "video/webm",
+        }:
+            mime_type = declared if declared != "video/webm" else "audio/webm"
+    try:
+        item = add_voice_item_to_db(safe_filename, storage_path, mime_type)
+    except Exception as exc:
+        logger.exception("Failed to save voice item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save voice note. Please try again.",
+        ) from exc
+
+    return _process_voice_item(item["id"])
+
+
 @app.get("/api/items/{item_id}/file")
 def get_item_source_file(
     item_id: int,
@@ -411,10 +516,7 @@ def retry_item_processing(item_id: int):
         return _process_pdf_item(item_id)
     if item["item_type"] == "image":
         return _process_image_item(item_id)
-    raise HTTPException(
-        status_code=400,
-        detail="Voice retry is not available yet.",
-    )
+    return _process_voice_item(item_id)
 
 
 @app.get("/api/items", response_model=List[InboxItem])

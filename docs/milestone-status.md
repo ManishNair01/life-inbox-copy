@@ -8,7 +8,7 @@
 | 3A — URL capture | `milestone/3-rich-capture` | `milestone-3a` | Done |
 | 3B — PDF capture | `milestone/3-rich-capture` | `milestone-3b` | Done |
 | 3C — Images / screenshots | `milestone/3-rich-capture` | `milestone-3c` | Done |
-| 3D — Voice notes | `milestone/3-rich-capture` | — | Next |
+| 3D — Voice notes | `milestone/3-rich-capture` | `milestone-3d` | Done |
 | 4 — Retrieval + Ask My Inbox | `milestone/4-retrieval-chat` | `milestone-4` | Done (from M3B tip) |
 | 5 — Attention / actions | `milestone/5-attention-actions` | — | Not started |
 | 6 — Deployable beta | `milestone/6-deployable-beta` | — | Not started |

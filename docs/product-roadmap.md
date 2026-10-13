@@ -22,7 +22,7 @@ understand → organize → ready/failed.
 - **3A** URL / article capture (done)
 - **3B** PDF / document upload (done)
 - **3C** Images / screenshots (+ OCR adapter) (done)
-- **3D** Voice notes (+ transcription adapter)
+- **3D** Voice notes (+ transcription adapter) (done)
 
 ## Milestone 4 — Retrieval + grounded “Ask My Inbox”
 
