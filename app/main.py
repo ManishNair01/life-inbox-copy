@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -110,9 +110,91 @@ app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 init_db()
 
 
+@app.middleware("http")
+async def bind_owner_from_session(request, call_next):
+    from app.auth import SESSION_COOKIE, parse_session_token
+    from app.config import load_config
+    from app.database import (
+        get_or_create_default_owner_id,
+        set_current_owner_id,
+    )
+
+    token = request.cookies.get(SESSION_COOKIE)
+    owner_id = parse_session_token(token) if token else None
+    if owner_id is None:
+        config = load_config(strict=False)
+        if config.environment == "local":
+            owner_id = get_or_create_default_owner_id()
+    set_current_owner_id(owner_id)
+    try:
+        response = await call_next(request)
+    finally:
+        set_current_owner_id(None)
+    return response
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    from app.config import config_warnings, load_config
+
+    try:
+        config = load_config(strict=False)
+        return {
+            "status": "ok",
+            "environment": config.environment,
+            "database": "postgres" if config.is_postgres else "sqlite",
+            "auth_mode": config.auth_mode,
+            "warnings": config_warnings(config),
+        }
+    except Exception as exc:
+        logger.exception("Health config check failed")
+        return {"status": "degraded", "error": str(exc)}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    from app.auth import SESSION_COOKIE, parse_session_token
+    from app.database import get_or_create_default_owner_id, get_user_by_id
+
+    token = request.cookies.get(SESSION_COOKIE)
+    user_id = parse_session_token(token) if token else None
+    if user_id is not None:
+        user = get_user_by_id(user_id)
+        if user is not None:
+            return user
+    # Local anonymous maps to default owner identity for display only.
+    return get_user_by_id(get_or_create_default_owner_id())
+
+
+@app.post("/api/auth/dev-login")
+def auth_dev_login(payload: dict, response: Response):
+    from app.auth import dev_login_user, set_session_cookie
+
+    email = str(payload.get("email", "")).strip()
+    display_name = payload.get("display_name")
+    user = dev_login_user(email, display_name=display_name)
+    set_session_cookie(response, user["id"])
+    return user
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    from app.auth import clear_session_cookie
+
+    clear_session_cookie(response)
+    return {"status": "logged_out"}
+
+
+@app.get("/api/auth/google/start")
+def auth_google_start():
+    """Stub only — real Google OAuth is not activated in this build."""
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Google sign-in stub only. Real OAuth consent is not enabled. "
+            "Use /api/auth/dev-login for private-beta local testing."
+        ),
+    )
 
 
 def _process_url_item(item_id: int) -> dict:
@@ -565,6 +647,14 @@ def get_items(
             status_code=500,
             detail="Unable to load items. Please try again.",
         ) from exc
+
+
+@app.get("/api/items/{item_id}", response_model=InboxItem)
+def read_item(item_id: int):
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return item
 
 
 @app.put("/api/items/{item_id}", response_model=InboxItem)

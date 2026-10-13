@@ -1365,7 +1365,53 @@ async function previewCalendarForTask(task) {
   }
 }
 
+async function loadAuthUser() {
+  try {
+    const user = await fetchJson('/api/auth/me', {}, 'Unable to load session.');
+    document.getElementById('authUser').textContent =
+      `Signed in as ${user.display_name} <${user.email}> (${user.auth_provider})`;
+  } catch {
+    document.getElementById('authUser').textContent = 'Not signed in';
+  }
+}
+
+async function devLogin(event) {
+  event.preventDefault();
+  const email = document.getElementById('devLoginEmail').value.trim();
+  if (!email) return;
+  try {
+    const user = await fetchJson(
+      '/api/auth/dev-login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email})
+      },
+      'Unable to sign in.'
+    );
+    setStatus('authStatus', `Signed in as ${user.email}`);
+    await loadAuthUser();
+    await loadNotes();
+    await loadTasks();
+    await loadAttention();
+    await loadDashboard();
+  } catch {
+    setStatus('authStatus', 'Sign-in failed (dev login may be disabled).', true);
+  }
+}
+
+async function logoutSession() {
+  try {
+    await fetchJson('/api/auth/logout', {method: 'POST'}, 'Unable to sign out.');
+    setStatus('authStatus', 'Signed out.');
+    await loadAuthUser();
+  } catch {
+    setStatus('authStatus', 'Sign-out failed.', true);
+  }
+}
+
 syncControlsFromUrl();
+loadAuthUser();
 loadNotes();
 loadLatestAnalysis();
 loadTasks();

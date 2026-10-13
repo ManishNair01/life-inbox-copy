@@ -2,9 +2,14 @@ import hashlib
 import json
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+_current_owner_id: ContextVar[Optional[int]] = ContextVar(
+    "life_inbox_owner_id", default=None
+)
 
 from sqlalchemy import (
     CheckConstraint,
@@ -75,6 +80,21 @@ TASK_OPEN = "open"
 TASK_COMPLETED = "completed"
 TASK_DISMISSED = "dismissed"
 TASK_STATUSES = {TASK_OPEN, TASK_COMPLETED, TASK_DISMISSED}
+DEFAULT_OWNER_EMAIL = "local@life-inbox.local"
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(Text, nullable=False)
+    display_name = Column(Text, nullable=False)
+    auth_provider = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
 
 
 class InboxItemRecord(Base):
@@ -93,6 +113,7 @@ class InboxItemRecord(Base):
     storage_path = Column(Text, nullable=True)
     extracted_text = Column(Text, nullable=True)
     ai_description = Column(Text, nullable=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
 
@@ -107,18 +128,20 @@ class AnalysisRunRecord(Base):
     status = Column(Text, nullable=False)
     mode = Column(Text, nullable=False)
     result_json = Column(Text, nullable=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
 
 class TopicRecord(Base):
     __tablename__ = "topics"
     __table_args__ = (
-        UniqueConstraint("name"),
+        UniqueConstraint("name", "owner_user_id", name="uq_topics_name_owner"),
         {"sqlite_autoincrement": True},
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=False)
     archived = Column(Integer, nullable=False, default=0)
@@ -207,6 +230,7 @@ class TaskRecord(Base):
     reminder_at = Column(Text, nullable=True)
     status = Column(Text, nullable=False)
     dedup_key = Column(Text, nullable=False)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=False)
 
@@ -256,8 +280,83 @@ DEFAULT_TOPIC_NAMES = (
 )
 
 
-def ensure_default_topics(session) -> None:
-    count = session.scalar(select(func.count()).select_from(TopicRecord)) or 0
+def set_current_owner_id(owner_user_id: Optional[int]) -> None:
+    _current_owner_id.set(owner_user_id)
+
+
+def get_current_owner_id() -> Optional[int]:
+    return _current_owner_id.get()
+
+
+def _user_to_dict(user: UserRecord) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "auth_provider": user.auth_provider,
+        "created_at": user.created_at,
+    }
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        return _user_to_dict(user) if user else None
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.email == email.strip().lower())
+        )
+        return _user_to_dict(user) if user else None
+
+
+def ensure_user(
+    *,
+    email: str,
+    display_name: str,
+    auth_provider: str,
+) -> dict:
+    cleaned = email.strip().lower()
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.email == cleaned)
+        )
+        if user is None:
+            user = UserRecord(
+                email=cleaned,
+                display_name=display_name.strip() or cleaned,
+                auth_provider=auth_provider,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(user)
+            session.commit()
+        return _user_to_dict(user)
+
+
+def get_or_create_default_owner_id() -> int:
+    user = ensure_user(
+        email=DEFAULT_OWNER_EMAIL,
+        display_name="Local Owner",
+        auth_provider="local",
+    )
+    return user["id"]
+
+
+def require_owner_id() -> int:
+    owner = get_current_owner_id()
+    if owner is not None:
+        return owner
+    return get_or_create_default_owner_id()
+
+
+def ensure_default_topics(session, owner_user_id: Optional[int] = None) -> None:
+    owner = owner_user_id
+    statement = select(func.count()).select_from(TopicRecord)
+    if owner is not None:
+        statement = statement.where(TopicRecord.owner_user_id == owner)
+    count = session.scalar(statement) or 0
     if count:
         return
     now = datetime.now(timezone.utc).isoformat()
@@ -266,6 +365,7 @@ def ensure_default_topics(session) -> None:
             TopicRecord(
                 name=name,
                 description=None,
+                owner_user_id=owner,
                 created_at=now,
                 updated_at=now,
                 archived=0,
@@ -283,7 +383,12 @@ def init_db():
     if AUTO_CREATE_TABLES:
         Base.metadata.create_all(bind=engine)
         with SessionLocal() as session:
-            ensure_default_topics(session)
+            owner = ensure_user(
+                email=DEFAULT_OWNER_EMAIL,
+                display_name="Local Owner",
+                auth_provider="local",
+            )
+            ensure_default_topics(session, owner_user_id=owner["id"])
             session.commit()
 
 
@@ -301,6 +406,7 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "storage_path": item.storage_path,
         "extracted_text": item.extracted_text,
         "ai_description": item.ai_description,
+        "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -308,11 +414,13 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
 
 def add_item_to_db(raw_text: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = InboxItemRecord(
             item_type=TEXT_ITEM_TYPE,
             raw_text=raw_text,
             processing_status=READY_STATUS,
+            owner_user_id=owner_id,
             created_at=now,
         )
         session.add(item)
@@ -329,8 +437,11 @@ def list_items_from_db(
     limit: Optional[int] = 100,
     offset: int = 0,
 ) -> list[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
-        statement = select(InboxItemRecord)
+        statement = select(InboxItemRecord).where(
+            InboxItemRecord.owner_user_id == owner_id
+        )
 
         if category or priority:
             statement = statement.join(
@@ -386,10 +497,13 @@ def list_items_from_db(
 
 def compute_inbox_fingerprint(session=None) -> str:
     """Stable hash of current inbox content used to detect stale analysis."""
+    owner_id = require_owner_id()
 
     def _fingerprint(active_session) -> str:
         items = active_session.scalars(
-            select(InboxItemRecord).order_by(InboxItemRecord.id.asc())
+            select(InboxItemRecord)
+            .where(InboxItemRecord.owner_user_id == owner_id)
+            .order_by(InboxItemRecord.id.asc())
         ).all()
         payload = [
             [
@@ -413,9 +527,14 @@ def compute_inbox_fingerprint(session=None) -> str:
 
 
 def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
-        if item is None or item.item_type != TEXT_ITEM_TYPE:
+        if (
+            item is None
+            or item.item_type != TEXT_ITEM_TYPE
+            or item.owner_user_id != owner_id
+        ):
             return None
 
         item.raw_text = raw_text
@@ -459,9 +578,10 @@ def _remove_orphan_tasks(session, item_ids: list[int]) -> None:
 
 
 def delete_item_from_db(item_id: int) -> bool:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
-        if item is None:
+        if item is None or item.owner_user_id != owner_id:
             return False
 
         insight = session.get(ItemInsightRecord, item_id)
@@ -519,11 +639,13 @@ def delete_note_from_db(note_id: int) -> bool:
 
 def start_analysis_run() -> int:
     started_at = datetime.now(timezone.utc).isoformat()
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         run = AnalysisRunRecord(
             started_at=started_at,
             status=ANALYSIS_RUNNING,
             mode="pending",
+            owner_user_id=owner_id,
         )
         session.add(run)
         session.commit()
@@ -531,9 +653,13 @@ def start_analysis_run() -> int:
 
 
 def _topic_id_by_name(session, name: str) -> Optional[int]:
-    ensure_default_topics(session)
+    owner_id = require_owner_id()
+    ensure_default_topics(session, owner_user_id=owner_id)
     topic = session.scalars(
-        select(TopicRecord).where(TopicRecord.name == name)
+        select(TopicRecord).where(
+            TopicRecord.name == name,
+            TopicRecord.owner_user_id == owner_id,
+        )
     ).first()
     if topic is not None:
         return topic.id
@@ -541,6 +667,7 @@ def _topic_id_by_name(session, name: str) -> Optional[int]:
     topic = TopicRecord(
         name=name,
         description="Created from AI organization",
+        owner_user_id=owner_id,
         created_at=now,
         updated_at=now,
         archived=0,
@@ -655,6 +782,7 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     due_confidence=parsed_timing.confidence,
                     status=TASK_OPEN,
                     dedup_key=dedup_key,
+                    owner_user_id=require_owner_id(),
                     created_at=completed_at,
                     updated_at=completed_at,
                 )
@@ -763,10 +891,14 @@ def fail_analysis_run(run_id: int) -> None:
 
 
 def get_latest_successful_analysis() -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         run = session.scalars(
             select(AnalysisRunRecord)
-            .where(AnalysisRunRecord.status == ANALYSIS_SUCCEEDED)
+            .where(
+                AnalysisRunRecord.status == ANALYSIS_SUCCEEDED,
+                AnalysisRunRecord.owner_user_id == owner_id,
+            )
             .order_by(
                 AnalysisRunRecord.completed_at.desc(),
                 AnalysisRunRecord.id.desc(),
@@ -839,8 +971,13 @@ def list_tasks_from_db(status_filter: str = TASK_OPEN) -> list[dict]:
     if status_filter not in TASK_STATUSES | {"all"}:
         raise ValueError("Unsupported task status")
 
+    owner_id = require_owner_id()
     with SessionLocal() as session:
-        statement = select(TaskRecord).order_by(TaskRecord.id.asc())
+        statement = (
+            select(TaskRecord)
+            .where(TaskRecord.owner_user_id == owner_id)
+            .order_by(TaskRecord.id.asc())
+        )
         if status_filter != "all":
             statement = statement.where(TaskRecord.status == status_filter)
         tasks = session.scalars(statement).all()
@@ -851,9 +988,10 @@ def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
     if task_status not in TASK_STATUSES:
         raise ValueError("Unsupported task status")
 
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         task = session.get(TaskRecord, task_id)
-        if task is None:
+        if task is None or task.owner_user_id != owner_id:
             return None
         if task.status != task_status:
             task.status = task_status
@@ -876,6 +1014,7 @@ def add_pdf_item_to_db(
             storage_path=storage_path,
             mime_type=mime_type,
             processing_status=STATUS_CAPTURED,
+            owner_user_id=require_owner_id(),
             created_at=now,
         )
         session.add(item)
@@ -920,6 +1059,7 @@ def add_image_item_to_db(
             storage_path=storage_path,
             mime_type=mime_type,
             processing_status=STATUS_CAPTURED,
+            owner_user_id=require_owner_id(),
             created_at=now,
         )
         session.add(item)
@@ -966,6 +1106,7 @@ def add_voice_item_to_db(
             storage_path=storage_path,
             mime_type=mime_type,
             processing_status=STATUS_CAPTURED,
+            owner_user_id=require_owner_id(),
             created_at=now,
         )
         session.add(item)
@@ -1030,6 +1171,7 @@ def add_url_item_to_db(url: str) -> dict:
             item_type=URL_ITEM_TYPE,
             source_url=url,
             processing_status=STATUS_CAPTURED,
+            owner_user_id=require_owner_id(),
             created_at=now,
         )
         session.add(item)
@@ -1087,9 +1229,10 @@ def fail_item_processing(item_id: int, error_message: str) -> Optional[dict]:
 
 
 def get_item_from_db(item_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
-        if item is None:
+        if item is None or item.owner_user_id != owner_id:
             return None
         return _item_to_dict(item)
 
@@ -1100,9 +1243,10 @@ def confirm_task_timing(
 ) -> Optional[dict]:
     from app.attention.dates import parse_timing_phrase
 
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         task = session.get(TaskRecord, task_id)
-        if task is None:
+        if task is None or task.owner_user_id != owner_id:
             return None
         if timing_text is not None:
             task.timing_text = timing_text
@@ -1116,9 +1260,10 @@ def confirm_task_timing(
 
 
 def snooze_task_in_db(task_id: int, until_iso_date: str) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         task = session.get(TaskRecord, task_id)
-        if task is None:
+        if task is None or task.owner_user_id != owner_id:
             return None
         task.snoozed_until = until_iso_date
         task.reminder_at = until_iso_date
@@ -1128,9 +1273,10 @@ def snooze_task_in_db(task_id: int, until_iso_date: str) -> Optional[dict]:
 
 
 def set_task_reminder_in_db(task_id: int, reminder_iso_date: str) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         task = session.get(TaskRecord, task_id)
-        if task is None:
+        if task is None or task.owner_user_id != owner_id:
             return None
         task.reminder_at = reminder_iso_date
         task.updated_at = datetime.now(timezone.utc).isoformat()
@@ -1281,10 +1427,15 @@ def _topic_to_dict(topic: TopicRecord, item_count: int = 0) -> dict:
 
 
 def list_topics_from_db(include_archived: bool = False) -> list[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
-        ensure_default_topics(session)
+        ensure_default_topics(session, owner_user_id=owner_id)
         session.commit()
-        statement = select(TopicRecord).order_by(TopicRecord.name.asc())
+        statement = (
+            select(TopicRecord)
+            .where(TopicRecord.owner_user_id == owner_id)
+            .order_by(TopicRecord.name.asc())
+        )
         if not include_archived:
             statement = statement.where(TopicRecord.archived == 0)
         topics = session.scalars(statement).all()
@@ -1305,10 +1456,14 @@ def list_topics_from_db(include_archived: bool = False) -> list[dict]:
 
 def create_topic_in_db(name: str, description: Optional[str] = None) -> dict:
     now = datetime.now(timezone.utc).isoformat()
+    owner_id = require_owner_id()
     with SessionLocal() as session:
-        ensure_default_topics(session)
+        ensure_default_topics(session, owner_user_id=owner_id)
         existing = session.scalars(
-            select(TopicRecord).where(TopicRecord.name == name)
+            select(TopicRecord).where(
+                TopicRecord.name == name,
+                TopicRecord.owner_user_id == owner_id,
+            )
         ).first()
         if existing is not None:
             if existing.archived:
@@ -1321,6 +1476,7 @@ def create_topic_in_db(name: str, description: Optional[str] = None) -> dict:
         topic = TopicRecord(
             name=name,
             description=description,
+            owner_user_id=owner_id,
             created_at=now,
             updated_at=now,
             archived=0,
@@ -1336,8 +1492,11 @@ def update_topic_in_db(
     description: Optional[str] = None,
     archived: Optional[bool] = None,
 ) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         topic = session.get(TopicRecord, topic_id)
+        if topic is not None and topic.owner_user_id != owner_id:
+            return None
         if topic is None:
             return None
         if name is not None:

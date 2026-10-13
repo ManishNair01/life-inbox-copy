@@ -10,3 +10,4 @@ pytest
 httpx
 pypdf
 Pillow
+psycopg[binary]

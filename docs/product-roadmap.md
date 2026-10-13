@@ -34,7 +34,7 @@ honesty; evaluation fixtures.
 Deadline views; in-app reminders; optional Google Calendar behind an adapter
 with preview + explicit confirmation only.
 
-## Milestone 6 — Deployable multi-user beta
+## Milestone 6 — Deployable multi-user beta (done)
 
 Auth, ownership scoping, Postgres for prod, storage abstraction, health,
 deployment guide. Stop before paid infra / public deploy without approval.

@@ -66,6 +66,7 @@ class InboxItem(BaseModel):
     storage_path: Optional[str] = None
     extracted_text: Optional[str] = None
     ai_description: Optional[str] = None
+    owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
 

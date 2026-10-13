@@ -81,6 +81,15 @@ Open http://127.0.0.1:8000
 - [ ] Analyze inbox includes ready URL items
 - [ ] Private/local URLs (127.0.0.1, localhost) rejected before fetch
 
+## Multi-user / auth smoke (Milestone 6+)
+
+- [ ] Dev login with email A; create a note; appears in list
+- [ ] Dev login with email B; note from A is not visible; delete of A’s id returns 404
+- [ ] Sign out clears session cookie
+- [ ] `/api/auth/google/start` returns 501 stub (no real OAuth)
+- [ ] `/api/health` returns status + environment metadata
+- [ ] Spoofing `X-User-Id` does not change ownership
+
 ## Attention / Calendar smoke (Milestone 5+)
 
 - [ ] After analysis, Attention section shows Today / Upcoming / Overdue / Unscheduled

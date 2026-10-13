@@ -35,6 +35,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "tasks",
             "topics",
             "calendar_action_receipts",
+            "users",
         } <= set(inspector.get_table_names())
         columns = {
             column["name"]: column
@@ -53,6 +54,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "storage_path",
             "extracted_text",
             "ai_description",
+            "owner_user_id",
             "created_at",
             "updated_at",
         }
@@ -67,6 +69,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "status",
             "mode",
             "result_json",
+            "owner_user_id",
         }
         assert {
             column["name"]
@@ -103,6 +106,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "reminder_at",
             "status",
             "dedup_key",
+            "owner_user_id",
             "created_at",
             "updated_at",
         }
@@ -113,6 +117,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "id",
             "name",
             "description",
+            "owner_user_id",
             "created_at",
             "updated_at",
             "archived",
@@ -126,7 +131,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
                 text("SELECT version_num FROM alembic_version")
             )
             topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
-        assert revision == "0010_attention_fields"
+        assert revision == "0011_multi_user_ownership"
         assert topic_count >= 9
     finally:
         engine.dispose()
@@ -227,7 +232,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0010_attention_fields"
+        assert revision == "0011_multi_user_ownership"
     finally:
         engine.dispose()
 
@@ -313,7 +318,7 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0010_attention_fields"
+        assert revision == "0011_multi_user_ownership"
 
         # Milestone 2 drops the one-task-per-source unique index so one
         # inbox item may source multiple durable tasks.

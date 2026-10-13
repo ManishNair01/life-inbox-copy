@@ -54,6 +54,8 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Retrieval / Ask in `app/retrieval/` (`GET /api/search`, `POST /api/ask`)
 - Attention / reminders in `app/attention/` (`GET /api/attention`, `/api/briefing`)
 - Calendar adapter in `app/integrations/calendar.py` (preview + mock confirm only)
+- Auth / ownership in `app/auth.py` + `users.owner_user_id` scoping
+- Config validation in `app/config.py`; deploy notes in `docs/deployment.md`
 - Browser UI: `app/templates/index.html`, `app/static/*`
 - Canonical API: `/api/items`, `/api/analyze`, `/api/tasks`
 - Deprecated adapter: `/api/notes`

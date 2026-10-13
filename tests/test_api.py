@@ -30,8 +30,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LIFE_INBOX_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    sys.modules.pop("app.database", None)
-    sys.modules.pop("app.main", None)
+    for module_name in (
+        "app.main",
+        "app.database",
+        "app.auth",
+        "app.config",
+        "app.integrations.calendar",
+    ):
+        sys.modules.pop(module_name, None)
     main = importlib.import_module("app.main")
     database = importlib.import_module("app.database")
 
@@ -40,8 +46,14 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
     database.engine.dispose()
-    sys.modules.pop("app.main", None)
-    sys.modules.pop("app.database", None)
+    for module_name in (
+        "app.main",
+        "app.database",
+        "app.auth",
+        "app.config",
+        "app.integrations.calendar",
+    ):
+        sys.modules.pop(module_name, None)
 
 
 def test_home_page_loads(client):
@@ -72,7 +84,10 @@ def test_health_check(client):
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert "environment" in payload
+    assert "database" in payload
 
 
 def test_create_and_list_canonical_text_item(client):
@@ -96,9 +111,11 @@ def test_create_and_list_canonical_text_item(client):
         "storage_path": None,
         "extracted_text": None,
         "ai_description": None,
+        "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
     }
+    assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]
 
 
@@ -1769,3 +1786,65 @@ def test_parse_timing_preserves_original_phrase():
     assert parsed.original_phrase == "this weekend maybe"
     assert parsed.due_date is not None
     assert parsed.needs_confirmation is True
+
+
+def test_user_isolation_prevents_cross_account_access(client):
+    alice = client.post(
+        "/api/auth/dev-login",
+        json={"email": "alice@example.com", "display_name": "Alice"},
+    ).json()
+    assert alice["email"] == "alice@example.com"
+    alice_item = client.post(
+        "/api/items",
+        json={"raw_text": "Alice private note about taxes"},
+    ).json()
+    assert alice_item["owner_user_id"] == alice["id"]
+
+    bob = client.post(
+        "/api/auth/dev-login",
+        json={"email": "bob@example.com", "display_name": "Bob"},
+    ).json()
+    assert bob["id"] != alice["id"]
+    bob_items = client.get("/api/items").json()
+    assert all(item["owner_user_id"] == bob["id"] for item in bob_items)
+    assert alice_item["id"] not in {item["id"] for item in bob_items}
+
+    missing = client.get(f"/api/items/{alice_item['id']}")
+    assert missing.status_code == 404
+
+    deleted = client.delete(f"/api/items/{alice_item['id']}")
+    assert deleted.status_code == 404
+
+    # Switch back to Alice and confirm her item remains.
+    client.post(
+        "/api/auth/dev-login",
+        json={"email": "alice@example.com"},
+    )
+    still_there = client.get(f"/api/items/{alice_item['id']}")
+    assert still_there.status_code == 200
+    assert still_there.json()["raw_text"].startswith("Alice private")
+
+
+def test_browser_supplied_user_id_header_is_ignored(client):
+    alice = client.post(
+        "/api/auth/dev-login",
+        json={"email": "alice2@example.com"},
+    ).json()
+    client.post("/api/items", json={"raw_text": "Owned by Alice session"})
+    # Spoof header must not switch identity.
+    items = client.get("/api/items", headers={"X-User-Id": "999999"}).json()
+    assert items
+    assert all(item["owner_user_id"] == alice["id"] for item in items)
+
+
+def test_google_oauth_start_is_stubbed(client):
+    response = client.get("/api/auth/google/start")
+    assert response.status_code == 501
+    assert "oauth" in response.json()["detail"].lower()
+
+
+def test_health_includes_config_metadata(client):
+    payload = client.get("/api/health").json()
+    assert payload["status"] == "ok"
+    assert "environment" in payload
+    assert "database" in payload
