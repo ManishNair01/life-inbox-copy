@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -14,11 +15,14 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    func,
     or_,
     select,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from app.similarity import find_item_relations
 
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "life_inbox.db"
@@ -88,6 +92,21 @@ class AnalysisRunRecord(Base):
     result_json = Column(Text, nullable=True)
 
 
+class TopicRecord(Base):
+    __tablename__ = "topics"
+    __table_args__ = (
+        UniqueConstraint("name"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(Text, nullable=False)
+    updated_at = Column(Text, nullable=False)
+    archived = Column(Integer, nullable=False, default=0)
+
+
 class ItemInsightRecord(Base):
     __tablename__ = "item_insights"
 
@@ -104,7 +123,44 @@ class ItemInsightRecord(Base):
     category = Column(Text, nullable=False)
     concise_title = Column(Text, nullable=False)
     priority = Column(Text, nullable=False)
+    topic_id = Column(Integer, ForeignKey("topics.id"), nullable=True)
+    tags_json = Column(Text, nullable=True)
+    rationale = Column(Text, nullable=True)
+    user_title = Column(Text, nullable=True)
+    user_topic_id = Column(Integer, ForeignKey("topics.id"), nullable=True)
+    user_priority = Column(Text, nullable=True)
+    user_tags_json = Column(Text, nullable=True)
+    needs_review = Column(Integer, nullable=False, default=0)
     updated_at = Column(Text, nullable=False)
+
+
+class ItemRelationRecord(Base):
+    __tablename__ = "item_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id_a",
+            "item_id_b",
+            "relation_type",
+            name="uq_item_relations_pair_type",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_id_a = Column(
+        Integer,
+        ForeignKey("inbox_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_id_b = Column(
+        Integer,
+        ForeignKey("inbox_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    relation_type = Column(Text, nullable=False)
+    score = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
+    dismissed = Column(Integer, nullable=False, default=0)
 
 
 class TaskRecord(Base):
@@ -126,6 +182,8 @@ class TaskRecord(Base):
     text = Column(Text, nullable=False)
     priority = Column(Text, nullable=False)
     timing_text = Column(Text, nullable=True)
+    ai_timing_text = Column(Text, nullable=True)
+    timing_confirmed = Column(Integer, nullable=False, default=0)
     status = Column(Text, nullable=False)
     dedup_key = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
@@ -134,9 +192,6 @@ class TaskRecord(Base):
 
 class TaskSourceItemRecord(Base):
     __tablename__ = "task_source_items"
-    __table_args__ = (
-        UniqueConstraint("item_id", name="uq_task_source_items_item_id"),
-    )
 
     task_id = Column(
         Integer,
@@ -150,6 +205,37 @@ class TaskSourceItemRecord(Base):
     )
 
 
+DEFAULT_TOPIC_NAMES = (
+    "Work",
+    "Money & Admin",
+    "Learning",
+    "Shopping & Errands",
+    "Health",
+    "Travel",
+    "Ideas",
+    "People",
+    "Personal / Reference",
+)
+
+
+def ensure_default_topics(session) -> None:
+    count = session.scalar(select(func.count()).select_from(TopicRecord)) or 0
+    if count:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for name in DEFAULT_TOPIC_NAMES:
+        session.add(
+            TopicRecord(
+                name=name,
+                description=None,
+                created_at=now,
+                updated_at=now,
+                archived=0,
+            )
+        )
+    session.flush()
+
+
 def init_db():
     """Prepare the DB connection.
 
@@ -158,6 +244,9 @@ def init_db():
     """
     if AUTO_CREATE_TABLES:
         Base.metadata.create_all(bind=engine)
+        with SessionLocal() as session:
+            ensure_default_topics(session)
+            session.commit()
 
 
 def _item_to_dict(item: InboxItemRecord) -> dict:
@@ -312,7 +401,7 @@ def _remove_orphan_tasks(session, item_ids: list[int]) -> None:
         if remaining:
             task = session.get(TaskRecord, task_id)
             if task is not None:
-                task.dedup_key = _task_dedup_key(list(remaining))
+                task.dedup_key = _task_dedup_key(list(remaining), task.text)
             continue
         task = session.get(TaskRecord, task_id)
         if task is not None:
@@ -376,6 +465,31 @@ def start_analysis_run() -> int:
         return run.id
 
 
+def _topic_id_by_name(session, name: str) -> Optional[int]:
+    ensure_default_topics(session)
+    topic = session.scalars(
+        select(TopicRecord).where(TopicRecord.name == name)
+    ).first()
+    if topic is not None:
+        return topic.id
+    now = datetime.now(timezone.utc).isoformat()
+    topic = TopicRecord(
+        name=name,
+        description="Created from AI organization",
+        created_at=now,
+        updated_at=now,
+        archived=0,
+    )
+    session.add(topic)
+    session.flush()
+    return topic.id
+
+
+def _normalize_task_text(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", (text or "").lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def complete_analysis_run(run_id: int, result: dict) -> dict:
     completed_at = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
@@ -383,7 +497,10 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
         if run is None or run.status != ANALYSIS_RUNNING:
             raise ValueError("Analysis run is not available for completion")
 
+        ensure_default_topics(session)
+
         for bucket in result["buckets"]:
+            topic_id = _topic_id_by_name(session, bucket["name"])
             for analyzed_item in bucket["notes"]:
                 item_id = analyzed_item["id"]
                 if session.get(InboxItemRecord, item_id) is None:
@@ -392,46 +509,82 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     )
                 insight = session.get(ItemInsightRecord, item_id)
                 if insight is None:
-                    insight = ItemInsightRecord(item_id=item_id)
+                    insight = ItemInsightRecord(
+                        item_id=item_id,
+                        needs_review=0,
+                    )
                     session.add(insight)
                 insight.analysis_run_id = run_id
+                # AI fields always refresh; user overrides are preserved.
                 insight.category = bucket["name"]
                 insight.concise_title = analyzed_item["title"]
                 insight.priority = analyzed_item["priority"]
+                insight.topic_id = topic_id
+                tags = analyzed_item.get("tags") or []
+                insight.tags_json = json.dumps(tags, ensure_ascii=False)
+                insight.rationale = analyzed_item.get("rationale") or (
+                    f"Grouped under “{bucket['name']}” based on the note content."
+                )
+                insight.needs_review = 0
                 insight.updated_at = completed_at
+                item = session.get(InboxItemRecord, item_id)
+                if item is not None and insight.user_title is None:
+                    item.title = analyzed_item["title"]
 
-        claimed_source_ids = set()
         for todo in result["todos"]:
-            source_item_ids = [
-                item_id
-                for item_id in sorted(set(todo["source_note_ids"]))
-                if item_id not in claimed_source_ids
-            ]
+            source_item_ids = sorted(set(todo["source_note_ids"]))
             if not source_item_ids:
                 continue
-            claimed_source_ids.update(source_item_ids)
-
             for item_id in source_item_ids:
                 if session.get(InboxItemRecord, item_id) is None:
                     raise ValueError(
                         f"Task references missing item {item_id}"
                     )
 
-            existing_tasks = session.scalars(
-                select(TaskRecord)
-                .join(TaskSourceItemRecord)
-                .where(TaskSourceItemRecord.item_id.in_(source_item_ids))
-                .distinct()
-                .order_by(TaskRecord.id.asc())
-            ).all()
+            dedup_key = _task_dedup_key(source_item_ids, todo["task"])
+            task = session.scalars(
+                select(TaskRecord).where(TaskRecord.dedup_key == dedup_key)
+            ).first()
 
-            if not existing_tasks:
+            if task is None:
+                # Durable match: same sources + similar normalized wording.
+                candidates = session.scalars(
+                    select(TaskRecord)
+                    .join(TaskSourceItemRecord)
+                    .where(TaskSourceItemRecord.item_id.in_(source_item_ids))
+                    .distinct()
+                    .order_by(TaskRecord.id.asc())
+                ).all()
+                target_norm = _normalize_task_text(todo["task"])
+                for candidate in candidates:
+                    candidate_sources = set(
+                        session.scalars(
+                            select(TaskSourceItemRecord.item_id).where(
+                                TaskSourceItemRecord.task_id == candidate.id
+                            )
+                        ).all()
+                    )
+                    if candidate_sources != set(source_item_ids):
+                        continue
+                    if _normalize_task_text(candidate.text) == target_norm:
+                        task = candidate
+                        break
+                    # Soft wording drift still maps to the same durable task.
+                    left = set(target_norm.split())
+                    right = set(_normalize_task_text(candidate.text).split())
+                    if left and right and len(left & right) / len(left | right) >= 0.6:
+                        task = candidate
+                        break
+
+            if task is None:
                 task = TaskRecord(
                     text=todo["task"],
                     priority=todo["priority"],
                     timing_text=todo["when"],
+                    ai_timing_text=todo["when"],
+                    timing_confirmed=0,
                     status=TASK_OPEN,
-                    dedup_key=_task_dedup_key(source_item_ids),
+                    dedup_key=dedup_key,
                     created_at=completed_at,
                     updated_at=completed_at,
                 )
@@ -444,29 +597,15 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                             item_id=item_id,
                         )
                     )
-                continue
-
-            for task in existing_tasks:
-                task_source_ids = session.scalars(
-                    select(TaskSourceItemRecord.item_id).where(
-                        TaskSourceItemRecord.task_id == task.id
-                    )
-                ).all()
-                changed = (
-                    task.text != todo["task"]
-                    or task.priority != todo["priority"]
-                    or task.timing_text != todo["when"]
-                )
+            else:
                 task.text = todo["task"]
                 task.priority = todo["priority"]
-                task.timing_text = todo["when"]
-                task.dedup_key = _task_dedup_key(list(task_source_ids))
-                if changed:
-                    task.updated_at = completed_at
-
-            if len(existing_tasks) == 1:
-                task = existing_tasks[0]
-                linked_source_ids = set(
+                task.ai_timing_text = todo["when"]
+                if not task.timing_confirmed:
+                    task.timing_text = todo["when"]
+                task.dedup_key = dedup_key
+                task.updated_at = completed_at
+                linked = set(
                     session.scalars(
                         select(TaskSourceItemRecord.item_id).where(
                             TaskSourceItemRecord.task_id == task.id
@@ -474,17 +613,47 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     ).all()
                 )
                 for item_id in source_item_ids:
-                    if item_id not in linked_source_ids:
+                    if item_id not in linked:
                         session.add(
                             TaskSourceItemRecord(
                                 task_id=task.id,
                                 item_id=item_id,
                             )
                         )
-                        linked_source_ids.add(item_id)
-                task.dedup_key = _task_dedup_key(
-                    sorted(linked_source_ids)
+
+        # Refresh deterministic relations for current inbox text.
+        items = [
+            _item_to_dict(item)
+            for item in session.scalars(select(InboxItemRecord)).all()
+        ]
+        for relation in session.scalars(select(ItemRelationRecord)).all():
+            if not relation.dismissed:
+                session.delete(relation)
+        session.flush()
+        for relation in find_item_relations(items):
+            existing = session.scalars(
+                select(ItemRelationRecord).where(
+                    ItemRelationRecord.item_id_a == relation["item_id_a"],
+                    ItemRelationRecord.item_id_b == relation["item_id_b"],
+                    ItemRelationRecord.relation_type
+                    == relation["relation_type"],
                 )
+            ).first()
+            if existing is not None:
+                if existing.dismissed:
+                    continue
+                existing.score = relation["score"]
+                continue
+            session.add(
+                ItemRelationRecord(
+                    item_id_a=relation["item_id_a"],
+                    item_id_b=relation["item_id_b"],
+                    relation_type=relation["relation_type"],
+                    score=relation["score"],
+                    created_at=completed_at,
+                    dismissed=0,
+                )
+            )
 
         fingerprint = compute_inbox_fingerprint(session)
         persisted = {
@@ -543,9 +712,12 @@ def get_latest_successful_analysis() -> Optional[dict]:
         }
 
 
-def _task_dedup_key(source_item_ids: list[int]) -> str:
+def _task_dedup_key(source_item_ids: list[int], task_text: str = "") -> str:
     fingerprint = json.dumps(
-        sorted(set(source_item_ids)),
+        {
+            "sources": sorted(set(source_item_ids)),
+            "task": _normalize_task_text(task_text),
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -563,6 +735,8 @@ def _task_to_dict(session, task: TaskRecord) -> dict:
         "text": task.text,
         "priority": task.priority,
         "timing_text": task.timing_text,
+        "ai_timing_text": task.ai_timing_text,
+        "timing_confirmed": bool(task.timing_confirmed),
         "status": task.status,
         "source_item_ids": list(source_item_ids),
         "created_at": task.created_at,
@@ -595,3 +769,320 @@ def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
             task.updated_at = datetime.now(timezone.utc).isoformat()
             session.commit()
         return _task_to_dict(session, task)
+
+
+def confirm_task_timing(
+    task_id: int,
+    timing_text: Optional[str] = None,
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None:
+            return None
+        if timing_text is not None:
+            task.timing_text = timing_text
+        task.timing_confirmed = 1
+        task.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _task_to_dict(session, task)
+
+
+def _topic_to_dict(topic: TopicRecord, item_count: int = 0) -> dict:
+    return {
+        "id": topic.id,
+        "name": topic.name,
+        "description": topic.description,
+        "archived": bool(topic.archived),
+        "item_count": item_count,
+        "created_at": topic.created_at,
+        "updated_at": topic.updated_at,
+    }
+
+
+def list_topics_from_db(include_archived: bool = False) -> list[dict]:
+    with SessionLocal() as session:
+        ensure_default_topics(session)
+        session.commit()
+        statement = select(TopicRecord).order_by(TopicRecord.name.asc())
+        if not include_archived:
+            statement = statement.where(TopicRecord.archived == 0)
+        topics = session.scalars(statement).all()
+        counts = {}
+        for insight in session.scalars(select(ItemInsightRecord)).all():
+            effective_topic = (
+                insight.user_topic_id
+                if insight.user_topic_id is not None
+                else insight.topic_id
+            )
+            if effective_topic is None:
+                continue
+            counts[effective_topic] = counts.get(effective_topic, 0) + 1
+        return [
+            _topic_to_dict(topic, counts.get(topic.id, 0)) for topic in topics
+        ]
+
+
+def create_topic_in_db(name: str, description: Optional[str] = None) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        ensure_default_topics(session)
+        existing = session.scalars(
+            select(TopicRecord).where(TopicRecord.name == name)
+        ).first()
+        if existing is not None:
+            if existing.archived:
+                existing.archived = 0
+                existing.description = description
+                existing.updated_at = now
+                session.commit()
+                return _topic_to_dict(existing)
+            raise ValueError("Topic already exists")
+        topic = TopicRecord(
+            name=name,
+            description=description,
+            created_at=now,
+            updated_at=now,
+            archived=0,
+        )
+        session.add(topic)
+        session.commit()
+        return _topic_to_dict(topic)
+
+
+def update_topic_in_db(
+    topic_id: int,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    archived: Optional[bool] = None,
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        topic = session.get(TopicRecord, topic_id)
+        if topic is None:
+            return None
+        if name is not None:
+            topic.name = name
+        if description is not None:
+            topic.description = description
+        if archived is not None:
+            topic.archived = 1 if archived else 0
+        topic.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _topic_to_dict(topic)
+
+
+def _parse_tags(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(tag) for tag in value]
+
+
+def _insight_to_dict(insight: ItemInsightRecord) -> dict:
+    effective_title = insight.user_title or insight.concise_title
+    effective_priority = insight.user_priority or insight.priority
+    effective_topic_id = (
+        insight.user_topic_id
+        if insight.user_topic_id is not None
+        else insight.topic_id
+    )
+    effective_tags = (
+        _parse_tags(insight.user_tags_json)
+        if insight.user_tags_json is not None
+        else _parse_tags(insight.tags_json)
+    )
+    return {
+        "item_id": insight.item_id,
+        "analysis_run_id": insight.analysis_run_id,
+        "category": insight.category,
+        "concise_title": insight.concise_title,
+        "priority": insight.priority,
+        "topic_id": insight.topic_id,
+        "tags": _parse_tags(insight.tags_json),
+        "rationale": insight.rationale,
+        "user_title": insight.user_title,
+        "user_topic_id": insight.user_topic_id,
+        "user_priority": insight.user_priority,
+        "user_tags": (
+            _parse_tags(insight.user_tags_json)
+            if insight.user_tags_json is not None
+            else None
+        ),
+        "effective_title": effective_title,
+        "effective_priority": effective_priority,
+        "effective_topic_id": effective_topic_id,
+        "effective_tags": effective_tags,
+        "needs_review": bool(insight.needs_review),
+        "updated_at": insight.updated_at,
+        "has_user_overrides": any(
+            [
+                insight.user_title is not None,
+                insight.user_topic_id is not None,
+                insight.user_priority is not None,
+                insight.user_tags_json is not None,
+            ]
+        ),
+    }
+
+
+def get_item_insight(item_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        insight = session.get(ItemInsightRecord, item_id)
+        if insight is None:
+            return None
+        return _insight_to_dict(insight)
+
+
+def update_item_insight_overrides(
+    item_id: int,
+    user_title: Optional[str] = None,
+    user_topic_id: Optional[int] = None,
+    user_priority: Optional[str] = None,
+    user_tags: Optional[list[str]] = None,
+    clear_overrides: bool = False,
+    needs_review: Optional[bool] = None,
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        insight = session.get(ItemInsightRecord, item_id)
+        if insight is None:
+            return None
+        if clear_overrides:
+            insight.user_title = None
+            insight.user_topic_id = None
+            insight.user_priority = None
+            insight.user_tags_json = None
+        else:
+            if user_title is not None:
+                insight.user_title = user_title
+            if user_topic_id is not None:
+                if session.get(TopicRecord, user_topic_id) is None:
+                    raise ValueError("Topic not found")
+                insight.user_topic_id = user_topic_id
+            if user_priority is not None:
+                insight.user_priority = user_priority
+            if user_tags is not None:
+                insight.user_tags_json = json.dumps(
+                    user_tags, ensure_ascii=False
+                )
+        if needs_review is not None:
+            insight.needs_review = 1 if needs_review else 0
+        insight.updated_at = datetime.now(timezone.utc).isoformat()
+        item = session.get(InboxItemRecord, item_id)
+        if item is not None and insight.user_title:
+            item.title = insight.user_title
+        session.commit()
+        return _insight_to_dict(insight)
+
+
+def list_relations_from_db(
+    include_dismissed: bool = False,
+) -> list[dict]:
+    with SessionLocal() as session:
+        statement = select(ItemRelationRecord).order_by(
+            ItemRelationRecord.id.asc()
+        )
+        if not include_dismissed:
+            statement = statement.where(ItemRelationRecord.dismissed == 0)
+        rows = session.scalars(statement).all()
+        return [
+            {
+                "id": row.id,
+                "item_id_a": row.item_id_a,
+                "item_id_b": row.item_id_b,
+                "relation_type": row.relation_type,
+                "score": float(row.score),
+                "dismissed": bool(row.dismissed),
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+
+
+def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        row = session.get(ItemRelationRecord, relation_id)
+        if row is None:
+            return None
+        row.dismissed = 1
+        session.commit()
+        return {
+            "id": row.id,
+            "item_id_a": row.item_id_a,
+            "item_id_b": row.item_id_b,
+            "relation_type": row.relation_type,
+            "score": float(row.score),
+            "dismissed": True,
+            "created_at": row.created_at,
+        }
+
+
+def get_organization_dashboard() -> dict:
+    with SessionLocal() as session:
+        ensure_default_topics(session)
+        session.commit()
+        topics = list_topics_from_db()
+        insights = {
+            insight.item_id: _insight_to_dict(insight)
+            for insight in session.scalars(select(ItemInsightRecord)).all()
+        }
+        items = [
+            _item_to_dict(item)
+            for item in session.scalars(
+                select(InboxItemRecord).order_by(InboxItemRecord.id.desc())
+            ).all()
+        ]
+        high_priority = []
+        needs_review = []
+        for item in items:
+            insight = insights.get(item["id"])
+            if insight is None:
+                needs_review.append(
+                    {
+                        **item,
+                        "reason": "Not yet organized",
+                    }
+                )
+                continue
+            card = {
+                **item,
+                "effective_title": insight["effective_title"],
+                "effective_priority": insight["effective_priority"],
+                "effective_topic_id": insight["effective_topic_id"],
+                "rationale": insight["rationale"],
+                "has_user_overrides": insight["has_user_overrides"],
+            }
+            if insight["effective_priority"] == "High":
+                high_priority.append(card)
+            if insight["needs_review"]:
+                needs_review.append({**card, "reason": "Marked for review"})
+
+        latest = get_latest_successful_analysis()
+        if latest and latest.get("is_stale"):
+            for item in items:
+                if item["id"] in insights:
+                    needs_review.append(
+                        {
+                            **item,
+                            "effective_title": insights[item["id"]][
+                                "effective_title"
+                            ],
+                            "reason": "Analysis stale — re-analyze recommended",
+                        }
+                    )
+                    break
+
+        open_tasks = list_tasks_from_db(TASK_OPEN)
+        relations = list_relations_from_db()
+        return {
+            "topics": topics,
+            "high_priority": high_priority[:20],
+            "open_tasks": open_tasks[:20],
+            "recently_captured": items[:10],
+            "needs_review": needs_review[:20],
+            "related_items": relations[:20],
+            "analysis": latest,
+        }

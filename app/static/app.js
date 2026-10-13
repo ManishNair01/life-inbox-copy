@@ -361,11 +361,13 @@ function renderTask(task) {
 
   const meta = document.createElement('div');
   meta.className = 'task-meta';
-  const timing = task.timing_text ? ` · ${task.timing_text}` : '';
+  const timingLabel = task.timing_text
+    ? ` · ${task.timing_text}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}`
+    : '';
   const sources = task.source_item_ids
     .map(itemId => `#${itemId}`)
     .join(', ');
-  meta.textContent = `${task.status}${timing} · Sources: ${sources}`;
+  meta.textContent = `${task.status}${timingLabel} · Sources: ${sources}`;
 
   const actions = document.createElement('div');
   actions.className = 'task-actions';
@@ -379,6 +381,28 @@ function renderTask(task) {
         transitionTask(task.id, 'dismiss', actions);
       })
     );
+    if (task.timing_text && !task.timing_confirmed) {
+      actions.append(
+        actionButton('Confirm date', 'secondary', async () => {
+          try {
+            await fetchJson(
+              `/api/tasks/${task.id}/confirm-timing`,
+              {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({timing_text: task.timing_text})
+              },
+              'Unable to confirm timing.'
+            );
+            setStatus('taskStatus', 'Timing confirmed.');
+            await loadTasks();
+            await loadDashboard();
+          } catch {
+            setStatus('taskStatus', 'Could not confirm timing.', true);
+          }
+        })
+      );
+    }
   } else {
     actions.append(
       actionButton('Reopen', '', () => {
@@ -558,6 +582,8 @@ async function analyzeInbox() {
     populateCategoryFilter(data);
     renderAnalysis(data);
     await loadTasks();
+    await loadTopics();
+    await loadDashboard();
     setStatus('analysisStatus', 'Analysis complete.');
   } catch {
     setStatus(
@@ -666,10 +692,107 @@ async function loadNotes(
   }
 }
 
+async function loadTopics() {
+  try {
+    const topics = await fetchJson(
+      '/api/topics',
+      undefined,
+      'Unable to load topics.'
+    );
+    const root = document.getElementById('topics');
+    root.innerHTML = '';
+    if (!topics.length) {
+      root.innerHTML = '<div class="panel muted">No topics yet.</div>';
+      return;
+    }
+    for (const topic of topics) {
+      const row = document.createElement('div');
+      row.className = 'topic';
+      row.innerHTML = `<strong>${esc(topic.name)}</strong><div class="muted">${topic.item_count} item${topic.item_count === 1 ? '' : 's'}${topic.description ? ` · ${esc(topic.description)}` : ''}</div>`;
+      root.appendChild(row);
+    }
+  } catch {
+    setStatus('topicStatus', 'We could not load topics.', true);
+  }
+}
+
+async function createTopic(event) {
+  event.preventDefault();
+  const input = document.getElementById('topicName');
+  const name = input.value.trim();
+  if (!name) return;
+  try {
+    await fetchJson(
+      '/api/topics',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name})
+      },
+      'Unable to create topic.'
+    );
+    input.value = '';
+    setStatus('topicStatus', 'Topic added.');
+    await loadTopics();
+    await loadDashboard();
+  } catch {
+    setStatus('topicStatus', 'Could not create that topic. It may already exist.', true);
+  }
+}
+
+async function loadDashboard() {
+  try {
+    const data = await fetchJson(
+      '/api/dashboard',
+      undefined,
+      'Unable to load dashboard.'
+    );
+    const root = document.getElementById('dashboard');
+    const section = (title, body) => `
+      <div class="panel">
+        <h3>${esc(title)}</h3>
+        ${body}
+      </div>
+    `;
+    const listOrEmpty = (items, render) =>
+      items && items.length
+        ? `<ul>${items.map(render).join('')}</ul>`
+        : '<p class="muted">Nothing here yet.</p>';
+
+    root.innerHTML = `
+      <div class="dashboard-grid">
+        ${section('Topics / Spaces', listOrEmpty(data.topics, t =>
+          `<li><strong>${esc(t.name)}</strong> · ${t.item_count}</li>`
+        ))}
+        ${section('High Priority', listOrEmpty(data.high_priority, item =>
+          `<li>${esc(item.effective_title || item.raw_text || ('#' + item.id))}${item.rationale ? `<div class="why">Why: ${esc(item.rationale)}</div>` : ''}</li>`
+        ))}
+        ${section('Open Tasks', listOrEmpty(data.open_tasks, task =>
+          `<li><strong>${esc(task.text)}</strong> <span class="pill">${esc(task.priority)}</span>${task.timing_text ? ` · ${esc(task.timing_text)}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}` : ''}</li>`
+        ))}
+        ${section('Recently Captured', listOrEmpty(data.recently_captured, item =>
+          `<li>#${item.id} · ${esc((item.raw_text || '').slice(0, 80))}</li>`
+        ))}
+        ${section('Needs Review', listOrEmpty(data.needs_review, item =>
+          `<li>#${item.id} · ${esc(item.reason || 'Review needed')}</li>`
+        ))}
+        ${section('Related Items', listOrEmpty(data.related_items, rel =>
+          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span></li>`
+        ))}
+      </div>
+    `;
+    setStatus('dashboardStatus', 'Dashboard updated.');
+  } catch {
+    setStatus('dashboardStatus', 'We could not load the organized dashboard.', true);
+  }
+}
+
 syncControlsFromUrl();
 loadNotes();
 loadLatestAnalysis();
 loadTasks();
+loadTopics();
+loadDashboard();
 
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();

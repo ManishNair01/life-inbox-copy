@@ -5,9 +5,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
-
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -32,9 +29,11 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "analysis_runs",
             "inbox_items",
             "item_insights",
+            "item_relations",
             "notes",
             "task_source_items",
             "tasks",
+            "topics",
         } <= set(inspector.get_table_names())
         columns = {
             column["name"]: column
@@ -73,6 +72,14 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "category",
             "concise_title",
             "priority",
+            "topic_id",
+            "tags_json",
+            "rationale",
+            "user_title",
+            "user_topic_id",
+            "user_priority",
+            "user_tags_json",
+            "needs_review",
             "updated_at",
         }
         assert {
@@ -83,10 +90,22 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "text",
             "priority",
             "timing_text",
+            "ai_timing_text",
+            "timing_confirmed",
             "status",
             "dedup_key",
             "created_at",
             "updated_at",
+        }
+        assert {
+            column["name"] for column in inspector.get_columns("topics")
+        } == {
+            "id",
+            "name",
+            "description",
+            "created_at",
+            "updated_at",
+            "archived",
         }
         assert {
             column["name"]
@@ -96,7 +115,9 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-        assert revision == "0006_deduplicate_tasks_by_source"
+            topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
+        assert revision == "0007_intelligent_organization"
+        assert topic_count >= 9
     finally:
         engine.dispose()
 
@@ -196,7 +217,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0006_deduplicate_tasks_by_source"
+        assert revision == "0007_intelligent_organization"
     finally:
         engine.dispose()
 
@@ -282,31 +303,42 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0006_deduplicate_tasks_by_source"
+        assert revision == "0007_intelligent_organization"
 
-        with pytest.raises(IntegrityError):
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """
-                        INSERT INTO tasks (
-                            id, text, priority, status, dedup_key,
-                            created_at, updated_at
-                        )
-                        VALUES (
-                            2, 'Another task', 'Medium', 'open',
-                            'another-key', '2026-01-05', '2026-01-05'
-                        )
-                        """
+        # Milestone 2 drops the one-task-per-source unique index so one
+        # inbox item may source multiple durable tasks.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO tasks (
+                        id, text, priority, status, dedup_key,
+                        created_at, updated_at, timing_confirmed
                     )
-                )
-                connection.execute(
-                    text(
-                        """
-                        INSERT INTO task_source_items (task_id, item_id)
-                        VALUES (2, 1)
-                        """
+                    VALUES (
+                        2, 'Another task', 'Medium', 'open',
+                        'another-key', '2026-01-05', '2026-01-05', 0
                     )
+                    """
                 )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO task_source_items (task_id, item_id)
+                    VALUES (2, 1)
+                    """
+                )
+            )
+            multi_links = connection.execute(
+                text(
+                    """
+                    SELECT task_id, item_id
+                    FROM task_source_items
+                    ORDER BY task_id
+                    """
+                )
+            ).all()
+        assert [tuple(link) for link in multi_links] == [(1, 1), (2, 1)]
     finally:
         engine.dispose()

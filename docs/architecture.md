@@ -23,9 +23,12 @@
 
 - `inbox_items` — canonical captures
 - `notes` — legacy safety copy (not authoritative)
+- `topics` — user-editable spaces/projects (seeded defaults)
 - `analysis_runs` — analyze attempts + JSON result (includes inbox fingerprint)
-- `item_insights` — latest AI category/title/priority per item
-- `tasks` / `task_source_items` — durable tasks linked to sources
+- `item_insights` — AI category/title/priority/tags/rationale/topic plus user overrides
+- `item_relations` — duplicate / near-duplicate / related pairs (dismissible)
+- `tasks` / `task_source_items` — durable tasks; multiple tasks per source allowed;
+  AI vs confirmed timing distinguished
 
 ## Analysis freshness
 

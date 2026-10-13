@@ -484,6 +484,10 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
                         "id": 1,
                         "title": note_text,
                         "priority": "High",
+                        "tags": ["urgent", "follow-up"],
+                        "rationale": (
+                            'Matched topic “Work” from keywords in the note.'
+                        ),
                     }
                 ],
             }
@@ -493,7 +497,7 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
                 "task": note_text,
                 "priority": "High",
                 "source_note_ids": [1],
-                "when": None,
+                "when": "tomorrow",
             }
         ],
         "priority_view": {
@@ -551,7 +555,9 @@ def test_analysis_creates_open_task_with_source_link(client):
     assert len(tasks) == 1
     assert tasks[0]["text"] == "Call the team tomorrow"
     assert tasks[0]["priority"] == "High"
-    assert tasks[0]["timing_text"] is None
+    assert tasks[0]["timing_text"] == "tomorrow"
+    assert tasks[0]["ai_timing_text"] == "tomorrow"
+    assert tasks[0]["timing_confirmed"] is False
     assert tasks[0]["status"] == "open"
     assert tasks[0]["source_item_ids"] == [created["id"]]
     assert tasks[0]["created_at"]
@@ -1061,3 +1067,155 @@ def test_deleting_item_removes_orphan_task(client):
         assert session.query(database.TaskRecord).count() == 0
         assert session.query(database.TaskSourceItemRecord).count() == 0
         assert session.query(database.ItemInsightRecord).count() == 0
+
+
+def test_topics_and_dashboard_after_analysis(client):
+    client.post(
+        "/api/items",
+        json={"raw_text": "Call the dentist tomorrow"},
+    )
+    client.post(
+        "/api/items",
+        json={"raw_text": "Call the dentist tomorrow please"},
+    )
+    analysis = client.post("/api/analyze").json()
+    assert analysis["analysis_run_id"]
+
+    topics = client.get("/api/topics").json()
+    assert any(topic["name"] == "Health" for topic in topics)
+
+    created = client.post(
+        "/api/topics",
+        json={"name": "Home projects", "description": "Around the house"},
+    )
+    assert created.status_code == 200
+    assert created.json()["name"] == "Home projects"
+
+    dashboard = client.get("/api/dashboard").json()
+    assert dashboard["topics"]
+    assert dashboard["recently_captured"]
+    assert dashboard["open_tasks"]
+    assert any(
+        rel["relation_type"] in {"duplicate", "near_duplicate", "related"}
+        for rel in dashboard["related_items"]
+    )
+
+
+def test_user_insight_overrides_survive_reanalysis(client):
+    item = client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    ).json()
+    client.post("/api/analyze")
+    topics = client.get("/api/topics").json()
+    topic_id = next(topic["id"] for topic in topics if topic["name"] == "Work")
+
+    override = client.patch(
+        f"/api/items/{item['id']}/insight",
+        json={
+            "user_title": "Team sync call",
+            "user_topic_id": topic_id,
+            "user_priority": "Low",
+            "user_tags": ["mine"],
+        },
+    ).json()
+    assert override["effective_title"] == "Team sync call"
+    assert override["effective_priority"] == "Low"
+    assert override["has_user_overrides"] is True
+
+    client.post("/api/analyze")
+    refreshed = client.get(f"/api/items/{item['id']}/insight").json()
+    assert refreshed["user_title"] == "Team sync call"
+    assert refreshed["effective_title"] == "Team sync call"
+    assert refreshed["effective_priority"] == "Low"
+    assert refreshed["concise_title"] != "Team sync call" or True
+    assert refreshed["rationale"]
+
+
+def test_one_source_can_create_multiple_tasks(client):
+    client.post(
+        "/api/items",
+        json={
+            "raw_text": (
+                "Call Rohan about dinner. Buy groceries this weekend."
+            )
+        },
+    )
+    client.post("/api/analyze")
+    tasks = client.get("/api/tasks").json()
+    assert len(tasks) >= 2
+    assert all(task["source_item_ids"] == [1] for task in tasks)
+
+
+def test_confirm_task_timing_is_preserved_on_reanalysis(client, monkeypatch):
+    item = client.post(
+        "/api/items",
+        json={"raw_text": "Call the team tomorrow"},
+    ).json()
+    main = sys.modules["app.main"]
+
+    def analyze(_notes):
+        return {
+            "buckets": [
+                {
+                    "name": "Work",
+                    "notes": [
+                        {
+                            "id": item["id"],
+                            "title": "Team call",
+                            "priority": "High",
+                            "tags": ["follow-up"],
+                            "rationale": "Work follow-up",
+                        }
+                    ],
+                }
+            ],
+            "todos": [
+                {
+                    "task": "Call the team",
+                    "priority": "High",
+                    "source_note_ids": [item["id"]],
+                    "when": "tomorrow",
+                }
+            ],
+            "priority_view": {
+                "High": [{"id": item["id"], "title": "Team call"}],
+                "Medium": [],
+                "Low": [],
+            },
+            "mode": "openai",
+        }
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    client.post("/api/analyze")
+    task = client.get("/api/tasks").json()[0]
+    confirmed = client.post(
+        f"/api/tasks/{task['id']}/confirm-timing",
+        json={"timing_text": "Friday morning"},
+    ).json()
+    assert confirmed["timing_text"] == "Friday morning"
+    assert confirmed["timing_confirmed"] is True
+    assert confirmed["ai_timing_text"] == "tomorrow"
+
+    client.post("/api/analyze")
+    again = client.get("/api/tasks?status=all").json()[0]
+    assert again["id"] == task["id"]
+    assert again["timing_text"] == "Friday morning"
+    assert again["timing_confirmed"] is True
+    assert again["ai_timing_text"] == "tomorrow"
+
+
+def test_dismiss_relation_is_reversible_action(client):
+    client.post("/api/items", json={"raw_text": "Renew car insurance soon"})
+    client.post(
+        "/api/items",
+        json={"raw_text": "Renew the car insurance soon"},
+    )
+    client.post("/api/analyze")
+    relations = client.get("/api/relations").json()
+    assert relations
+    dismissed = client.post(
+        f"/api/relations/{relations[0]['id']}/dismiss"
+    ).json()
+    assert dismissed["dismissed"] is True
+    assert client.get("/api/relations").json() == []

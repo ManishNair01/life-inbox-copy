@@ -17,6 +17,23 @@
     <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
     <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
 
+    <h2>Organized dashboard</h2>
+    <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="dashboard" class="dashboard">
+      <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+    </div>
+
+    <h2>Topics / spaces</h2>
+    <form id="topicForm" class="topic-form" onsubmit="createTopic(event)">
+      <label>
+        New topic
+        <input id="topicName" maxlength="80" placeholder="e.g. Home projects" required />
+      </label>
+      <button type="submit">Add topic</button>
+    </form>
+    <p id="topicStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="topics"></div>
+
     <h2>AI-organized inbox</h2>
     <p id="analysisStatus" class="status muted" role="status" aria-live="polite"></p>
     <div id="aiOutput" class="panel">

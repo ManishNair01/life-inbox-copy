@@ -10,24 +10,36 @@ from app.database import (
     add_item_to_db,
     add_note_to_db,
     complete_analysis_run,
+    confirm_task_timing,
+    create_topic_in_db,
     delete_item_from_db,
     delete_note_from_db,
+    dismiss_relation_in_db,
     fail_analysis_run,
+    get_item_insight,
     get_latest_successful_analysis,
+    get_organization_dashboard,
     init_db,
     list_items_from_db,
     list_notes_from_db,
+    list_relations_from_db,
     list_tasks_from_db,
+    list_topics_from_db,
     set_task_status,
     start_analysis_run,
     update_item_in_db,
+    update_item_insight_overrides,
     update_note_in_db,
+    update_topic_in_db,
 )
 from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.schemas import (
     InboxItem,
     InboxItemCreate,
     InboxItemUpdate,
+    InsightOverrideUpdate,
+    ItemInsight,
+    ItemRelation,
     Note,
     NoteCreate,
     NoteUpdate,
@@ -35,6 +47,10 @@ from app.schemas import (
     Priority,
     Task,
     TaskListStatus,
+    TaskTimingConfirm,
+    Topic,
+    TopicCreate,
+    TopicUpdate,
 )
 
 
@@ -231,6 +247,146 @@ def reopen_task(task_id: int):
 @app.post("/api/tasks/{task_id}/dismiss", response_model=Task)
 def dismiss_task(task_id: int):
     return _transition_task(task_id, "dismissed")
+
+
+@app.post("/api/tasks/{task_id}/confirm-timing", response_model=Task)
+def confirm_timing(task_id: int, payload: TaskTimingConfirm):
+    try:
+        task = confirm_task_timing(task_id, payload.timing_text)
+    except Exception as exc:
+        logger.exception("Failed to confirm task timing")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to confirm task timing. Please try again.",
+        ) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
+
+
+@app.get("/api/topics", response_model=List[Topic])
+def get_topics(include_archived: bool = Query(False)):
+    try:
+        return list_topics_from_db(include_archived=include_archived)
+    except Exception as exc:
+        logger.exception("Failed to load topics")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load topics. Please try again.",
+        ) from exc
+
+
+@app.post("/api/topics", response_model=Topic)
+def create_topic(payload: TopicCreate):
+    try:
+        return create_topic_in_db(payload.name.strip(), payload.description)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create topic")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create topic. Please try again.",
+        ) from exc
+
+
+@app.patch("/api/topics/{topic_id}", response_model=Topic)
+def patch_topic(topic_id: int, payload: TopicUpdate):
+    try:
+        topic = update_topic_in_db(
+            topic_id,
+            name=payload.name.strip() if payload.name else None,
+            description=payload.description,
+            archived=payload.archived,
+        )
+    except Exception as exc:
+        logger.exception("Failed to update topic")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update topic. Please try again.",
+        ) from exc
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found.")
+    return topic
+
+
+@app.get("/api/items/{item_id}/insight", response_model=ItemInsight)
+def read_item_insight(item_id: int):
+    try:
+        insight = get_item_insight(item_id)
+    except Exception as exc:
+        logger.exception("Failed to load item insight")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load insight. Please try again.",
+        ) from exc
+    if insight is None:
+        raise HTTPException(status_code=404, detail="Insight not found.")
+    return insight
+
+
+@app.patch("/api/items/{item_id}/insight", response_model=ItemInsight)
+def patch_item_insight(item_id: int, payload: InsightOverrideUpdate):
+    try:
+        insight = update_item_insight_overrides(
+            item_id,
+            user_title=payload.user_title,
+            user_topic_id=payload.user_topic_id,
+            user_priority=payload.user_priority,
+            user_tags=payload.user_tags,
+            clear_overrides=payload.clear_overrides,
+            needs_review=payload.needs_review,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to update item insight")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update insight. Please try again.",
+        ) from exc
+    if insight is None:
+        raise HTTPException(status_code=404, detail="Insight not found.")
+    return insight
+
+
+@app.get("/api/relations", response_model=List[ItemRelation])
+def get_relations(include_dismissed: bool = Query(False)):
+    try:
+        return list_relations_from_db(include_dismissed=include_dismissed)
+    except Exception as exc:
+        logger.exception("Failed to load relations")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load related items. Please try again.",
+        ) from exc
+
+
+@app.post("/api/relations/{relation_id}/dismiss", response_model=ItemRelation)
+def dismiss_relation(relation_id: int):
+    try:
+        relation = dismiss_relation_in_db(relation_id)
+    except Exception as exc:
+        logger.exception("Failed to dismiss relation")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to dismiss relation. Please try again.",
+        ) from exc
+    if relation is None:
+        raise HTTPException(status_code=404, detail="Relation not found.")
+    return relation
+
+
+@app.get("/api/dashboard")
+def organization_dashboard():
+    try:
+        return get_organization_dashboard()
+    except Exception as exc:
+        logger.exception("Failed to load organization dashboard")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load dashboard. Please try again.",
+        ) from exc
 
 
 @app.get(

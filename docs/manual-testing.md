@@ -27,6 +27,15 @@ Open http://127.0.0.1:8000
 - [ ] Invalid empty note rejected with friendly status
 - [ ] `/api/health` returns `{"status":"ok"}`
 
+## Organization smoke (Milestone 2+)
+
+- [ ] Dashboard shows Topics, High Priority, Open Tasks, Recently Captured, Needs Review, Related
+- [ ] Add a custom topic from the Topics form
+- [ ] Multi-action note creates multiple tasks from one source
+- [ ] Confirm date on a task → labeled confirmed; survives re-analyze
+- [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
+- [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
+
 ## Error states
 
 - [ ] Stop the server mid-request → friendly client error, text preserved in textarea

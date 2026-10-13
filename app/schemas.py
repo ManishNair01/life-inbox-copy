@@ -83,6 +83,8 @@ class AnalysisNote(StrictAnalysisModel):
     id: int
     title: str = Field(min_length=1)
     priority: Priority
+    tags: List[str] = Field(default_factory=list)
+    rationale: Optional[str] = None
 
 
 class AnalysisBucket(StrictAnalysisModel):
@@ -173,7 +175,75 @@ class Task(BaseModel):
     text: str
     priority: Priority
     timing_text: Optional[str]
+    ai_timing_text: Optional[str] = None
+    timing_confirmed: bool = False
     status: TaskStatus
     source_item_ids: List[int]
     created_at: str
     updated_at: str
+
+
+class TaskTimingConfirm(BaseModel):
+    timing_text: Optional[str] = Field(default=None, max_length=200)
+
+
+class TopicCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=400)
+
+
+class TopicUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=400)
+    archived: Optional[bool] = None
+
+
+class Topic(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    archived: bool
+    item_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class InsightOverrideUpdate(BaseModel):
+    user_title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    user_topic_id: Optional[int] = None
+    user_priority: Optional[Priority] = None
+    user_tags: Optional[List[str]] = None
+    clear_overrides: bool = False
+    needs_review: Optional[bool] = None
+
+
+class ItemInsight(BaseModel):
+    item_id: int
+    analysis_run_id: int
+    category: str
+    concise_title: str
+    priority: Priority
+    topic_id: Optional[int]
+    tags: List[str]
+    rationale: Optional[str]
+    user_title: Optional[str]
+    user_topic_id: Optional[int]
+    user_priority: Optional[Priority]
+    user_tags: Optional[List[str]]
+    effective_title: str
+    effective_priority: Priority
+    effective_topic_id: Optional[int]
+    effective_tags: List[str]
+    needs_review: bool
+    updated_at: str
+    has_user_overrides: bool
+
+
+class ItemRelation(BaseModel):
+    id: int
+    item_id_a: int
+    item_id_b: int
+    relation_type: str
+    score: float
+    dismissed: bool
+    created_at: str
