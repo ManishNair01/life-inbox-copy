@@ -36,6 +36,15 @@ Open http://127.0.0.1:8000
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
 - [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
 
+## PDF capture smoke (Milestone 3B+)
+
+- [ ] Choose a small text-based PDF → item appears with `item_type=pdf`
+- [ ] Processing reaches `ready` with title + extracted preview (or `failed` with error)
+- [ ] “Open PDF” link downloads/previews the stored file
+- [ ] Retry on failed PDF succeeds when the file is readable
+- [ ] Analyze inbox includes ready PDF items
+- [ ] Non-PDF or empty/image-only PDF rejected or marked failed with clear message
+
 ## URL capture smoke (Milestone 3A+)
 
 - [ ] Paste a public https URL → item appears with `item_type=url`

@@ -199,6 +199,42 @@ async function addNote() {
   }
 }
 
+async function addPdf() {
+  const input = document.getElementById('pdfFile');
+  const file = input.files && input.files[0];
+  if (!file) {
+    setStatus('noteStatus', 'Choose a PDF file before uploading.', true);
+    input.focus();
+    return;
+  }
+  setButtonBusy('addPdfButton', true, 'Uploading…', 'Upload PDF');
+  setStatus('noteStatus', 'Saving PDF and extracting text…');
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const item = await fetchJson(
+      '/api/items/pdf',
+      {method: 'POST', body: formData},
+      'Unable to upload PDF.'
+    );
+    input.value = '';
+    setStatus(
+      'noteStatus',
+      item.processing_status === 'ready'
+        ? 'PDF saved and processed.'
+        : `PDF saved but processing failed: ${item.error_message || 'unknown error'}`,
+      item.processing_status !== 'ready'
+    );
+    await loadNotes();
+    await loadLatestAnalysis();
+    await loadDashboard();
+  } catch {
+    setStatus('noteStatus', 'We could not upload that PDF.', true);
+  } finally {
+    setButtonBusy('addPdfButton', false, 'Uploading…', 'Upload PDF');
+  }
+}
+
 async function addUrl() {
   const input = document.getElementById('urlText');
   const url = input.value.trim();
@@ -263,6 +299,13 @@ function renderNote(note) {
     const title = note.title || note.source_url || 'Saved URL';
     const body = note.extracted_text || note.raw_text || '';
     text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.source_url || '')}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
+  } else if (note.item_type === 'pdf') {
+    const title = note.title || note.original_filename || 'PDF document';
+    const body = note.extracted_text || note.raw_text || '';
+    const preview = note.storage_path
+      ? `<a href="/api/items/${note.id}/file" target="_blank" rel="noopener">Open PDF</a>`
+      : '';
+    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.original_filename || '')}${preview ? ` · ${preview}` : ''}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
   } else {
     text.textContent = note.raw_text;
   }
@@ -284,17 +327,26 @@ function renderNote(note) {
       deleteExistingNote(note, root, editButton, deleteButton);
     });
     actions.append(editButton, deleteButton);
-  } else if (note.item_type === 'url' && note.processing_status === 'failed') {
+  } else if (
+    (note.item_type === 'url' || note.item_type === 'pdf') &&
+    note.processing_status === 'failed'
+  ) {
     actions.append(
       actionButton('Retry', '', async () => {
         try {
           const updated = await fetchJson(
             `/api/items/${note.id}/retry`,
             {method: 'POST'},
-            'Unable to retry URL processing.'
+            'Unable to retry capture processing.'
           );
           root.replaceWith(renderNote(updated));
-          setStatus('noteStatus', updated.processing_status === 'ready' ? 'URL processed.' : 'URL still failed.');
+          const label = note.item_type === 'pdf' ? 'PDF' : 'URL';
+          setStatus(
+            'noteStatus',
+            updated.processing_status === 'ready'
+              ? `${label} processed.`
+              : `${label} still failed.`
+          );
           await loadLatestAnalysis();
           await loadDashboard();
         } catch {
@@ -302,6 +354,12 @@ function renderNote(note) {
         }
       })
     );
+    actions.append(
+      actionButton('Delete', 'danger', () => {
+        deleteExistingNote(note, root, null, null);
+      })
+    );
+  } else if (note.item_type === 'pdf') {
     actions.append(
       actionButton('Delete', 'danger', () => {
         deleteExistingNote(note, root, null, null);

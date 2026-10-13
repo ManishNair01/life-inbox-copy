@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     test_db_path = tmp_path / "life_inbox_test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
     monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
+    monkeypatch.setenv("LIFE_INBOX_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     sys.modules.pop("app.database", None)
@@ -1327,3 +1328,101 @@ def test_analyze_includes_ready_url_items(client, monkeypatch):
         for note in bucket["notes"]
     }
     assert url_item["id"] in ids
+
+
+def test_pdf_capture_persists_before_processing_and_extracts_text(client, monkeypatch):
+    from tests.pdf_fixtures import SAMPLE_TEXT, make_text_pdf
+
+    main = sys.modules["app.main"]
+    database = sys.modules["app.database"]
+    original_add = database.add_pdf_item_to_db
+    pdf_bytes = make_text_pdf()
+
+    def slow_add(original_filename, storage_path, mime_type):
+        item = original_add(original_filename, storage_path, mime_type)
+        assert item["processing_status"] == "captured"
+        assert item["original_filename"] == "notes.pdf"
+        assert item["storage_path"]
+        return item
+
+    monkeypatch.setattr(database, "add_pdf_item_to_db", slow_add)
+
+    response = client.post(
+        "/api/items/pdf",
+        files={"file": ("notes.pdf", pdf_bytes, "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()
+    assert item["item_type"] == "pdf"
+    assert item["processing_status"] == "ready"
+    assert SAMPLE_TEXT in (item["extracted_text"] or "")
+
+    file_response = client.get(f"/api/items/{item['id']}/file")
+    assert file_response.status_code == 200
+    assert file_response.headers["content-type"].startswith("application/pdf")
+    assert file_response.content.startswith(b"%PDF")
+
+
+def test_pdf_capture_rejects_invalid_uploads(client):
+    response = client.post(
+        "/api/items/pdf",
+        files={"file": ("notes.txt", b"not a pdf", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert "pdf" in response.json()["detail"].lower()
+
+
+def test_failed_pdf_capture_can_retry(client, monkeypatch):
+    from tests.pdf_fixtures import make_text_pdf
+
+    main = sys.modules["app.main"]
+    attempts = {"count": 0}
+    real_extract = main.extract_pdf_text
+
+    def flaky_extract(data, *, original_filename=None):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise ValueError("Temporary PDF parse failure")
+        return real_extract(data, original_filename=original_filename)
+
+    monkeypatch.setattr(main, "extract_pdf_text", flaky_extract)
+
+    first = client.post(
+        "/api/items/pdf",
+        files={"file": ("notes.pdf", make_text_pdf(), "application/pdf")},
+    ).json()
+    assert first["processing_status"] == "failed"
+    assert "parse failure" in (first["error_message"] or "").lower()
+
+    retry = client.post(f"/api/items/{first['id']}/retry").json()
+    assert retry["processing_status"] == "ready"
+
+
+def test_analyze_includes_ready_pdf_items(client):
+    from tests.pdf_fixtures import make_text_pdf
+
+    pdf_item = client.post(
+        "/api/items/pdf",
+        files={"file": ("habits.pdf", make_text_pdf(title="Habits"), "application/pdf")},
+    ).json()
+    assert pdf_item["processing_status"] == "ready"
+
+    analysis = client.post("/api/analyze").json()
+    ids = {
+        note["id"]
+        for bucket in analysis["buckets"]
+        for note in bucket["notes"]
+    }
+    assert pdf_item["id"] in ids
+
+
+def test_blank_pdf_fails_with_helpful_message(client):
+    from tests.pdf_fixtures import make_blank_pdf
+
+    item = client.post(
+        "/api/items/pdf",
+        files={"file": ("scan.pdf", make_blank_pdf(), "application/pdf")},
+    ).json()
+    assert item["processing_status"] == "failed"
+    assert "image-only" in (item["error_message"] or "").lower()

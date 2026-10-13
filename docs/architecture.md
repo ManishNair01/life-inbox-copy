@@ -17,6 +17,7 @@
 | `app/database.py` | Models, persistence helpers, fingerprints, task upsert |
 | `app/schemas.py` | Request/response and analysis contracts |
 | `app/organizer.py` | OpenAI + fallback organization |
+| `app/capture/` | Rich capture (URL fetch, PDF storage/extraction, lifecycle) |
 | `app/templates` / `app/static` | Browser UI |
 
 ## Data model (current)
@@ -43,6 +44,18 @@ inbox has changed since that run.
 3. `alembic upgrade head` on empty and previous-milestone DBs in the quality gate
 
 `LIFE_INBOX_AUTO_CREATE_TABLES=1` is allowed only for isolated automated tests.
+
+## Rich capture lifecycle
+
+URL and PDF captures follow: **capture → save original → process → extract →
+organize → ready/failed**.
+
+- Original sources are persisted before extraction (`source_url` or `storage_path`).
+- `processing_status`: `captured`, `processing`, `ready`, `failed`.
+- `POST /api/items/{id}/retry` re-runs processing for failed URL/PDF items.
+- Ready captures feed organization via `list_notes_from_db()` (uses `extracted_text`).
+
+Uploads default to `data/uploads/` (override with `LIFE_INBOX_UPLOAD_DIR`).
 
 ## External services
 

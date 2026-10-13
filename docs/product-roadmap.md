@@ -20,7 +20,7 @@ Shared ingestion lifecycle: capture → save original → process → extract �
 understand → organize → ready/failed.
 
 - **3A** URL / article capture
-- **3B** PDF / document upload
+- **3B** PDF / document upload (done)
 - **3C** Images / screenshots (+ OCR adapter)
 - **3D** Voice notes (+ transcription adapter)
 

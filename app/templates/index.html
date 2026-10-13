@@ -19,6 +19,11 @@
       <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article" />
       <button id="addUrlButton" type="button" class="secondary" onclick="addUrl()">Save URL</button>
     </div>
+    <div class="pdf-capture">
+      <label for="pdfFile">Upload PDF</label>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <button id="addPdfButton" type="button" class="secondary" onclick="addPdf()">Upload PDF</button>
+    </div>
     <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
     <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
 
@@ -69,6 +74,7 @@
           <option value="">All</option>
           <option value="text">Text</option>
           <option value="url">URL</option>
+          <option value="pdf">PDF</option>
         </select>
       </label>
       <label>

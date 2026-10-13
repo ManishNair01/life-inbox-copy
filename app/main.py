@@ -2,15 +2,19 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, status
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.capture.pdf_extract import extract_pdf_text, validate_pdf_upload
+from app.capture.storage import read_stored_bytes, resolve_storage_path, store_pdf_bytes
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.database import (
     add_item_to_db,
     add_note_to_db,
+    add_pdf_item_to_db,
     add_url_item_to_db,
+    complete_pdf_item_processing,
     complete_analysis_run,
     complete_url_item_processing,
     confirm_task_timing,
@@ -108,6 +112,60 @@ def _process_url_item(item_id: int) -> dict:
         return failed
 
 
+def _process_pdf_item(item_id: int) -> dict:
+    mark_item_processing(item_id)
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    storage_path = item.get("storage_path")
+    if not storage_path:
+        failed = fail_item_processing(
+            item_id,
+            "Stored PDF file is missing.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    try:
+        data = read_stored_bytes(storage_path)
+        extracted = extract_pdf_text(
+            data,
+            original_filename=item.get("original_filename"),
+        )
+        processed = complete_pdf_item_processing(
+            item_id,
+            title=extracted["title"],
+            raw_text=extracted["raw_text"],
+            extracted_text=extracted["extracted_text"],
+            mime_type=extracted.get("mime_type"),
+        )
+        if processed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return processed
+    except FileNotFoundError:
+        failed = fail_item_processing(
+            item_id,
+            "Stored PDF file is missing.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    except ValueError as exc:
+        failed = fail_item_processing(item_id, str(exc))
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+    except Exception as exc:
+        logger.exception("PDF processing failed")
+        failed = fail_item_processing(
+            item_id,
+            "Unable to extract text from this PDF.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+
+
 @app.post("/api/items", response_model=InboxItem)
 def create_item(payload: InboxItemCreate):
     try:
@@ -139,19 +197,79 @@ def create_url_item(payload: UrlItemCreate):
     return _process_url_item(item["id"])
 
 
+@app.post("/api/items/pdf", response_model=InboxItem)
+async def create_pdf_item(file: UploadFile = File(...)):
+    data = await file.read()
+    try:
+        safe_filename = validate_pdf_upload(
+            file.filename or "document.pdf",
+            file.content_type,
+            data,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        storage_path = store_pdf_bytes(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to store PDF upload")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store PDF. Please try again.",
+        ) from exc
+
+    mime_type = (file.content_type or "application/pdf").split(";", 1)[0].strip()
+    try:
+        item = add_pdf_item_to_db(safe_filename, storage_path, mime_type)
+    except Exception as exc:
+        logger.exception("Failed to save PDF item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save PDF. Please try again.",
+        ) from exc
+
+    return _process_pdf_item(item["id"])
+
+
+@app.get("/api/items/{item_id}/file")
+def get_item_source_file(item_id: int):
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    if item["item_type"] != "pdf" or not item.get("storage_path"):
+        raise HTTPException(
+            status_code=404,
+            detail="No stored file for this item.",
+        )
+    try:
+        path = resolve_storage_path(item["storage_path"])
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Stored file not found.") from exc
+    filename = item.get("original_filename") or "document.pdf"
+    return FileResponse(
+        path,
+        media_type=item.get("mime_type") or "application/pdf",
+        filename=filename,
+    )
+
+
 @app.post("/api/items/{item_id}/retry", response_model=InboxItem)
 def retry_item_processing(item_id: int):
     item = get_item_from_db(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found.")
-    if item["item_type"] != "url":
+    if item["item_type"] not in {"url", "pdf"}:
         raise HTTPException(
             status_code=400,
-            detail="Only failed or pending URL items can be retried here.",
+            detail="Only URL or PDF capture items can be retried here.",
         )
     if item["processing_status"] == "ready":
         return item
-    return _process_url_item(item_id)
+    if item["item_type"] == "url":
+        return _process_url_item(item_id)
+    return _process_pdf_item(item_id)
 
 
 @app.get("/api/items", response_model=List[InboxItem])

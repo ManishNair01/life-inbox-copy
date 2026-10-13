@@ -80,12 +80,15 @@ creation, listing, editing, and deletion. Items include:
 - optional `title`, `source_url`, `original_filename`, and `mime_type`;
 - `raw_text`, `created_at`, and optional `updated_at`.
 
-Only `item_type="text"` is created or displayed in this version. File uploads,
-URLs, voice, and image inputs are not implemented.
+Supported captures: `text` notes, `url` article links (`POST /api/items/url`),
+and `pdf` uploads (`POST /api/items/pdf`, multipart field `file`). Image and
+voice capture are planned. PDF originals are stored under `data/uploads/` (or
+`LIFE_INBOX_UPLOAD_DIR`); preview via `GET /api/items/{id}/file`.
 
 `GET /api/items` accepts optional `q`, `item_type`, `category`, `priority`,
 `processing_status`, `limit` (1–500, default 100), and `offset` query
-parameters. Text search is case-insensitive and matches raw text or title.
+parameters. Text search is case-insensitive and matches raw text, title,
+extracted text, or original filename.
 Category and priority filters use the latest saved analysis insights. The
 browser loads notes in pages of 100 with a “Load more” control.
 

@@ -7,6 +7,7 @@ Guidance for humans and coding agents working in this repository.
 ```bash
 python3 -m pip install -r requirements.txt
 export DATABASE_URL="sqlite:////absolute/path/to/temp_life_inbox.db"
+export LIFE_INBOX_UPLOAD_DIR="/tmp/life_inbox_uploads"
 python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
@@ -49,6 +50,7 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Persistence / domain writes in `app/database.py`
 - Pydantic contracts in `app/schemas.py`
 - Organization / AI in `app/organizer.py`
+- Rich capture in `app/capture/` (`POST /api/items/url`, `POST /api/items/pdf`)
 - Browser UI: `app/templates/index.html`, `app/static/*`
 - Canonical API: `/api/items`, `/api/analyze`, `/api/tasks`
 - Deprecated adapter: `/api/notes`

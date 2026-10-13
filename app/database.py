@@ -29,8 +29,10 @@ from app.capture.pipeline import (
     STATUS_FAILED,
     STATUS_PROCESSING,
     STATUS_READY,
+    PDF_ITEM_TYPE,
     URL_ITEM_TYPE,
 )
+from app.capture.storage import delete_stored_file
 from app.similarity import find_item_relations
 
 
@@ -323,6 +325,14 @@ def list_items_from_db(
                         search_text,
                         autoescape=True,
                     ),
+                    InboxItemRecord.extracted_text.icontains(
+                        search_text,
+                        autoescape=True,
+                    ),
+                    InboxItemRecord.original_filename.icontains(
+                        search_text,
+                        autoescape=True,
+                    ),
                 )
             )
         if item_type:
@@ -433,8 +443,10 @@ def delete_item_from_db(item_id: int) -> bool:
         if insight is not None:
             session.delete(insight)
         _remove_orphan_tasks(session, [item_id])
+        storage_path = item.storage_path
         session.delete(item)
         session.commit()
+        delete_stored_file(storage_path)
         return True
 
 
@@ -797,6 +809,50 @@ def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
             task.updated_at = datetime.now(timezone.utc).isoformat()
             session.commit()
         return _task_to_dict(session, task)
+
+
+def add_pdf_item_to_db(
+    original_filename: str,
+    storage_path: str,
+    mime_type: str,
+) -> dict:
+    """Persist uploaded PDF metadata before text extraction."""
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = InboxItemRecord(
+            item_type=PDF_ITEM_TYPE,
+            original_filename=original_filename,
+            storage_path=storage_path,
+            mime_type=mime_type,
+            processing_status=STATUS_CAPTURED,
+            created_at=now,
+        )
+        session.add(item)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def complete_pdf_item_processing(
+    item_id: int,
+    *,
+    title: str,
+    raw_text: str,
+    extracted_text: str,
+    mime_type: Optional[str],
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.title = title
+        item.raw_text = raw_text
+        item.extracted_text = extracted_text
+        item.mime_type = mime_type
+        item.processing_status = STATUS_READY
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _item_to_dict(item)
 
 
 def add_url_item_to_db(url: str) -> dict:
