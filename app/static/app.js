@@ -658,6 +658,7 @@ function showEditNote(note, root) {
         },
         'Unable to update note.'
       );
+      LifeInboxPagination.afterLoadedNoteUpdated(itemPagination, updatedNote);
       root.replaceWith(renderNote(updatedNote));
       setStatus('noteStatus', 'Note updated.');
       await loadLatestAnalysis();
@@ -708,6 +709,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
       {method: 'DELETE'},
       'Unable to delete note.'
     );
+    LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
     await loadLatestAnalysis();
@@ -986,27 +988,58 @@ async function analyzeInbox() {
   }
 }
 
-const ITEM_PAGE_SIZE = 100;
-let loadedItemOffset = 0;
-let loadedItems = [];
-let hasMoreItems = false;
+const itemPagination = LifeInboxPagination.createState(
+  LifeInboxPagination.PAGE_SIZE
+);
+
+function updateLoadMoreButton(failureMessage) {
+  const existingMore = document.getElementById('loadMoreItems');
+  if (existingMore) existingMore.remove();
+  if (!itemPagination.hasMore) return;
+
+  const root = document.getElementById('notes');
+  const more = document.createElement('button');
+  more.id = 'loadMoreItems';
+  more.type = 'button';
+  more.className = 'secondary';
+  more.textContent = itemPagination.listRequestInFlight
+    ? 'Loading…'
+    : 'Load more';
+  more.disabled = itemPagination.listRequestInFlight;
+  more.setAttribute(
+    'aria-busy',
+    String(itemPagination.listRequestInFlight)
+  );
+  more.addEventListener('click', () => {
+    if (itemPagination.listRequestInFlight) return;
+    loadNotes(failureMessage, {append: true});
+  });
+  root.appendChild(more);
+}
 
 async function loadNotes(
   failureMessage = 'We could not load your notes. Reload to try again.',
   {append = false} = {}
 ) {
+  if (!LifeInboxPagination.beginListRequest(itemPagination)) {
+    return false;
+  }
+
   const params = itemFilterParams();
   if (!append) {
-    loadedItemOffset = 0;
-    loadedItems = [];
-    hasMoreItems = false;
+    LifeInboxPagination.resetForReload(itemPagination);
   }
-  params.set('limit', String(ITEM_PAGE_SIZE));
-  params.set('offset', String(loadedItemOffset));
+  params.set('limit', String(itemPagination.pageSize));
+  params.set('offset', String(itemPagination.loadedOffset));
   const filtered = [...params.keys()].some(
     key => key !== 'limit' && key !== 'offset' && params.get(key)
   );
   const query = params.toString();
+
+  if (append) {
+    updateLoadMoreButton(failureMessage);
+  }
+
   try {
     const notes = await fetchJson(
       `/api/items?${query}`,
@@ -1032,38 +1065,39 @@ async function loadNotes(
       return true;
     }
 
-    const textNotes = notes.filter(item => item.item_type === 'text');
-    loadedItems = append ? loadedItems.concat(textNotes) : textNotes;
-    loadedItemOffset += notes.length;
-    hasMoreItems = notes.length === ITEM_PAGE_SIZE;
+    const {textNotes, hasMore} = LifeInboxPagination.applyFetchedPage(
+      itemPagination,
+      notes,
+      {append}
+    );
 
     for (const note of textNotes) {
       root.appendChild(renderNote(note));
     }
 
-    if (hasMoreItems) {
-      const more = document.createElement('button');
-      more.id = 'loadMoreItems';
-      more.type = 'button';
-      more.className = 'secondary';
-      more.textContent = 'Load more';
-      more.addEventListener('click', () => {
-        loadNotes(failureMessage, {append: true});
-      });
-      root.appendChild(more);
+    if (hasMore) {
+      updateLoadMoreButton(failureMessage);
     }
 
+    const loadedCount = itemPagination.loadedItems.length;
     setStatus(
       'searchStatus',
       filtered
-        ? `${loadedItems.length}${hasMoreItems ? '+' : ''} matching item${loadedItems.length === 1 ? '' : 's'}.`
-        : hasMoreItems
-          ? `Showing ${loadedItems.length}+ items.`
+        ? `${loadedCount}${hasMore ? '+' : ''} matching item${loadedCount === 1 ? '' : 's'}.`
+        : hasMore
+          ? `Showing ${loadedCount}+ items.`
           : ''
     );
     return true;
   } catch {
-    if (filtered) {
+    if (append) {
+      setStatus(
+        'noteStatus',
+        'We could not load more notes. Your current notes are still here—please try again.',
+        true
+      );
+      updateLoadMoreButton(failureMessage);
+    } else if (filtered) {
       setStatus(
         'searchStatus',
         'Search failed. Please try again.',
@@ -1073,101 +1107,11 @@ async function loadNotes(
       setStatus('noteStatus', failureMessage, true);
     }
     return false;
-  }
-}
-
-async function loadTopics() {
-  try {
-    const topics = await fetchJson(
-      '/api/topics',
-      undefined,
-      'Unable to load topics.'
-    );
-    const root = document.getElementById('topics');
-    root.innerHTML = '';
-    if (!topics.length) {
-      root.innerHTML = '<div class="panel muted">No topics yet.</div>';
-      return;
+  } finally {
+    LifeInboxPagination.endListRequest(itemPagination);
+    if (itemPagination.hasMore) {
+      updateLoadMoreButton(failureMessage);
     }
-    for (const topic of topics) {
-      const row = document.createElement('div');
-      row.className = 'topic';
-      row.innerHTML = `<strong>${esc(topic.name)}</strong><div class="muted">${topic.item_count} item${topic.item_count === 1 ? '' : 's'}${topic.description ? ` · ${esc(topic.description)}` : ''}</div>`;
-      root.appendChild(row);
-    }
-  } catch {
-    setStatus('topicStatus', 'We could not load topics.', true);
-  }
-}
-
-async function createTopic(event) {
-  event.preventDefault();
-  const input = document.getElementById('topicName');
-  const name = input.value.trim();
-  if (!name) return;
-  try {
-    await fetchJson(
-      '/api/topics',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name})
-      },
-      'Unable to create topic.'
-    );
-    input.value = '';
-    setStatus('topicStatus', 'Topic added.');
-    await loadTopics();
-    await loadDashboard();
-  } catch {
-    setStatus('topicStatus', 'Could not create that topic. It may already exist.', true);
-  }
-}
-
-async function loadDashboard() {
-  try {
-    const data = await fetchJson(
-      '/api/dashboard',
-      undefined,
-      'Unable to load dashboard.'
-    );
-    const root = document.getElementById('dashboard');
-    const section = (title, body) => `
-      <div class="panel">
-        <h3>${esc(title)}</h3>
-        ${body}
-      </div>
-    `;
-    const listOrEmpty = (items, render) =>
-      items && items.length
-        ? `<ul>${items.map(render).join('')}</ul>`
-        : '<p class="muted">Nothing here yet.</p>';
-
-    root.innerHTML = `
-      <div class="dashboard-grid">
-        ${section('Topics / Spaces', listOrEmpty(data.topics, t =>
-          `<li><strong>${esc(t.name)}</strong> · ${t.item_count}</li>`
-        ))}
-        ${section('High Priority', listOrEmpty(data.high_priority, item =>
-          `<li>${esc(item.effective_title || item.raw_text || ('#' + item.id))}${item.rationale ? `<div class="why">Why: ${esc(item.rationale)}</div>` : ''}</li>`
-        ))}
-        ${section('Open Tasks', listOrEmpty(data.open_tasks, task =>
-          `<li><strong>${esc(task.text)}</strong> <span class="pill">${esc(task.priority)}</span>${task.timing_text ? ` · ${esc(task.timing_text)}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}` : ''}</li>`
-        ))}
-        ${section('Recently Captured', listOrEmpty(data.recently_captured, item =>
-          `<li>#${item.id} · ${esc((item.raw_text || '').slice(0, 80))}</li>`
-        ))}
-        ${section('Needs Review', listOrEmpty(data.needs_review, item =>
-          `<li>#${item.id} · ${esc(item.reason || 'Review needed')}</li>`
-        ))}
-        ${section('Related Items', listOrEmpty(data.related_items, rel =>
-          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span></li>`
-        ))}
-      </div>
-    `;
-    setStatus('dashboardStatus', 'Dashboard updated.');
-  } catch {
-    setStatus('dashboardStatus', 'We could not load the organized dashboard.', true);
   }
 }
 
