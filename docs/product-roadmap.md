@@ -19,9 +19,9 @@ per source; organized dashboard.
 Shared ingestion lifecycle: capture → save original → process → extract →
 understand → organize → ready/failed.
 
-- **3A** URL / article capture
+- **3A** URL / article capture (done)
 - **3B** PDF / document upload (done)
-- **3C** Images / screenshots (+ OCR adapter)
+- **3C** Images / screenshots (+ OCR adapter) (done)
 - **3D** Voice notes (+ transcription adapter)
 
 ## Milestone 4 — Retrieval + grounded “Ask My Inbox”
@@ -41,4 +41,4 @@ deployment guide. Stop before paid infra / public deploy without approval.
 
 ## Execution priority (time-constrained)
 
-M1 (fast) → M2 showcase → M3A → M3B → M4 → images/voice → M5 → M6.
+M1 (fast) → M2 showcase → M3A → M3B → M4 → M3C images → M3D voice → M5 → M6.

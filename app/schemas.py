@@ -65,12 +65,17 @@ class InboxItem(BaseModel):
     error_message: Optional[str] = None
     storage_path: Optional[str] = None
     extracted_text: Optional[str] = None
+    ai_description: Optional[str] = None
     created_at: str
     updated_at: Optional[str]
 
 
 class UrlItemCreate(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
+
+
+class ExtractedTextUpdate(BaseModel):
+    extracted_text: str = Field(min_length=0, max_length=20000)
 
 
 Priority = Literal["High", "Medium", "Low"]

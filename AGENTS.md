@@ -50,7 +50,7 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Persistence / domain writes in `app/database.py`
 - Pydantic contracts in `app/schemas.py`
 - Organization / AI in `app/organizer.py`
-- Rich capture in `app/capture/` (`POST /api/items/url`, `POST /api/items/pdf`)
+- Rich capture in `app/capture/` (`POST /api/items/url`, `/pdf`, `/image`)
 - Browser UI: `app/templates/index.html`, `app/static/*`
 - Canonical API: `/api/items`, `/api/analyze`, `/api/tasks`
 - Deprecated adapter: `/api/notes`

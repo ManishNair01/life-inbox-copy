@@ -45,6 +45,16 @@ Open http://127.0.0.1:8000
 - [ ] Analyze inbox includes ready PDF items
 - [ ] Non-PDF or empty/image-only PDF rejected or marked failed with clear message
 
+## Image capture smoke (Milestone 3C+)
+
+- [ ] Choose a PNG/JPEG → item appears with `item_type=image`
+- [ ] Thumbnail preview and **Open image** link work
+- [ ] OCR (extracted) and AI description (inferred) are labeled separately
+- [ ] **Edit OCR text** saves corrected extracted text without changing AI description
+- [ ] Retry on failed image succeeds when the file is readable
+- [ ] Analyze inbox includes ready image items (after OCR text or description exists)
+- [ ] Non-image upload rejected with a clear message
+
 ## URL capture smoke (Milestone 3A+)
 
 - [ ] Paste a public https URL → item appears with `item_type=url`

@@ -6,14 +6,24 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.capture.image_extract import process_image_bytes, validate_image_upload
 from app.capture.pdf_extract import extract_pdf_text, validate_pdf_upload
-from app.capture.storage import read_stored_bytes, resolve_storage_path, store_pdf_bytes
+from app.capture.storage import (
+    read_stored_bytes,
+    resolve_storage_path,
+    store_image_bytes,
+    store_pdf_bytes,
+    store_thumbnail_bytes,
+    thumbnail_relative_path,
+)
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.database import (
+    add_image_item_to_db,
     add_item_to_db,
     add_note_to_db,
     add_pdf_item_to_db,
     add_url_item_to_db,
+    complete_image_item_processing,
     complete_pdf_item_processing,
     complete_analysis_run,
     complete_url_item_processing,
@@ -37,6 +47,7 @@ from app.database import (
     mark_item_processing,
     set_task_status,
     start_analysis_run,
+    update_item_extracted_text,
     update_item_in_db,
     update_item_insight_overrides,
     update_note_in_db,
@@ -44,6 +55,7 @@ from app.database import (
 )
 from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.schemas import (
+    ExtractedTextUpdate,
     InboxItem,
     InboxItemCreate,
     InboxItemUpdate,
@@ -166,6 +178,57 @@ def _process_pdf_item(item_id: int) -> dict:
         return failed
 
 
+def _process_image_item(item_id: int) -> dict:
+    mark_item_processing(item_id)
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    storage_path = item.get("storage_path")
+    if not storage_path:
+        failed = fail_item_processing(item_id, "Stored image file is missing.")
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    try:
+        data = read_stored_bytes(storage_path)
+        processed_payload = process_image_bytes(
+            data,
+            original_filename=item.get("original_filename") or "image.png",
+            mime_type=item.get("mime_type") or "image/png",
+        )
+        store_thumbnail_bytes(storage_path, processed_payload["thumbnail_bytes"])
+        processed = complete_image_item_processing(
+            item_id,
+            title=processed_payload["title"],
+            raw_text=processed_payload["raw_text"],
+            extracted_text=processed_payload["extracted_text"],
+            ai_description=processed_payload["ai_description"],
+            mime_type=processed_payload.get("mime_type"),
+        )
+        if processed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return processed
+    except FileNotFoundError:
+        failed = fail_item_processing(item_id, "Stored image file is missing.")
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return failed
+    except ValueError as exc:
+        failed = fail_item_processing(item_id, str(exc))
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+    except Exception as exc:
+        logger.exception("Image processing failed")
+        failed = fail_item_processing(
+            item_id,
+            "Unable to process this image.",
+        )
+        if failed is None:
+            raise HTTPException(status_code=404, detail="Item not found.") from exc
+        return failed
+
+
 @app.post("/api/items", response_model=InboxItem)
 def create_item(payload: InboxItemCreate):
     try:
@@ -233,26 +296,101 @@ async def create_pdf_item(file: UploadFile = File(...)):
     return _process_pdf_item(item["id"])
 
 
+@app.post("/api/items/image", response_model=InboxItem)
+async def create_image_item(file: UploadFile = File(...)):
+    data = await file.read()
+    try:
+        safe_filename, detected_mime, extension = validate_image_upload(
+            file.filename or "image.png",
+            file.content_type,
+            data,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        storage_path = store_image_bytes(data, extension)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to store image upload")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store image. Please try again.",
+        ) from exc
+
+    mime_type = detected_mime
+    if file.content_type:
+        declared = file.content_type.split(";", 1)[0].strip().lower()
+        if declared in {
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/webp",
+            "image/gif",
+        }:
+            mime_type = declared
+    try:
+        item = add_image_item_to_db(safe_filename, storage_path, mime_type)
+    except Exception as exc:
+        logger.exception("Failed to save image item")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save image. Please try again.",
+        ) from exc
+
+    return _process_image_item(item["id"])
+
+
 @app.get("/api/items/{item_id}/file")
-def get_item_source_file(item_id: int):
+def get_item_source_file(
+    item_id: int,
+    variant: Optional[str] = Query(None, max_length=20),
+):
     item = get_item_from_db(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found.")
-    if item["item_type"] != "pdf" or not item.get("storage_path"):
+    if item["item_type"] not in {"pdf", "image", "voice"} or not item.get(
+        "storage_path"
+    ):
         raise HTTPException(
             status_code=404,
             detail="No stored file for this item.",
         )
+    relative = item["storage_path"]
+    media_type = item.get("mime_type") or "application/octet-stream"
+    filename = item.get("original_filename") or "download"
+    if variant == "thumb" and item["item_type"] == "image":
+        relative = thumbnail_relative_path(item["storage_path"])
+        media_type = "image/jpeg"
+        filename = f"thumb_{Path(filename).stem}.jpg"
     try:
-        path = resolve_storage_path(item["storage_path"])
+        path = resolve_storage_path(relative)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="Stored file not found.") from exc
-    filename = item.get("original_filename") or "document.pdf"
+    if item["item_type"] == "pdf" and not media_type:
+        media_type = "application/pdf"
     return FileResponse(
         path,
-        media_type=item.get("mime_type") or "application/pdf",
+        media_type=media_type,
         filename=filename,
     )
+
+
+@app.patch("/api/items/{item_id}/extracted-text", response_model=InboxItem)
+def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    if item["item_type"] not in {"image", "voice", "pdf"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Extracted text can only be edited for image, voice, or PDF items.",
+        )
+    updated = update_item_extracted_text(item_id, payload.extracted_text)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return updated
 
 
 @app.post("/api/items/{item_id}/retry", response_model=InboxItem)
@@ -260,16 +398,23 @@ def retry_item_processing(item_id: int):
     item = get_item_from_db(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found.")
-    if item["item_type"] not in {"url", "pdf"}:
+    if item["item_type"] not in {"url", "pdf", "image", "voice"}:
         raise HTTPException(
             status_code=400,
-            detail="Only URL or PDF capture items can be retried here.",
+            detail="Only capture items (URL/PDF/image/voice) can be retried here.",
         )
     if item["processing_status"] == "ready":
         return item
     if item["item_type"] == "url":
         return _process_url_item(item_id)
-    return _process_pdf_item(item_id)
+    if item["item_type"] == "pdf":
+        return _process_pdf_item(item_id)
+    if item["item_type"] == "image":
+        return _process_image_item(item_id)
+    raise HTTPException(
+        status_code=400,
+        detail="Voice retry is not available yet.",
+    )
 
 
 @app.get("/api/items", response_model=List[InboxItem])

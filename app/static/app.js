@@ -235,6 +235,42 @@ async function addPdf() {
   }
 }
 
+async function addImage() {
+  const input = document.getElementById('imageFile');
+  const file = input.files && input.files[0];
+  if (!file) {
+    setStatus('noteStatus', 'Choose an image before uploading.', true);
+    input.focus();
+    return;
+  }
+  setButtonBusy('addImageButton', true, 'Uploading…', 'Upload image');
+  setStatus('noteStatus', 'Saving image and running OCR…');
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const item = await fetchJson(
+      '/api/items/image',
+      {method: 'POST', body: formData},
+      'Unable to upload image.'
+    );
+    input.value = '';
+    setStatus(
+      'noteStatus',
+      item.processing_status === 'ready'
+        ? 'Image saved and processed.'
+        : `Image saved but processing failed: ${item.error_message || 'unknown error'}`,
+      item.processing_status !== 'ready'
+    );
+    await loadNotes();
+    await loadLatestAnalysis();
+    await loadDashboard();
+  } catch {
+    setStatus('noteStatus', 'We could not upload that image.', true);
+  } finally {
+    setButtonBusy('addImageButton', false, 'Uploading…', 'Upload image');
+  }
+}
+
 async function addUrl() {
   const input = document.getElementById('urlText');
   const url = input.value.trim();
@@ -288,6 +324,14 @@ function actionButton(label, className, onClick) {
   return button;
 }
 
+function captureTypeLabel(itemType) {
+  if (itemType === 'pdf') return 'PDF';
+  if (itemType === 'image') return 'Image';
+  if (itemType === 'voice') return 'Voice';
+  if (itemType === 'url') return 'URL';
+  return 'Item';
+}
+
 function renderNote(note) {
   const root = document.createElement('div');
   root.className = 'note';
@@ -306,6 +350,23 @@ function renderNote(note) {
       ? `<a href="/api/items/${note.id}/file" target="_blank" rel="noopener">Open PDF</a>`
       : '';
     text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.original_filename || '')}${preview ? ` · ${preview}` : ''}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
+  } else if (note.item_type === 'image') {
+    const title = note.title || note.original_filename || 'Image';
+    const ocr = note.extracted_text || '';
+    const ai = note.ai_description || '';
+    const thumb = note.storage_path
+      ? `<img class="capture-thumb" src="/api/items/${note.id}/file?variant=thumb" alt="Thumbnail for ${esc(title)}" />`
+      : '';
+    const open = note.storage_path
+      ? `<a href="/api/items/${note.id}/file" target="_blank" rel="noopener">Open image</a>`
+      : '';
+    text.innerHTML = [
+      `<strong>${esc(title)}</strong>`,
+      `<div class="muted">${esc(note.original_filename || '')}${open ? ` · ${open}` : ''}</div>`,
+      thumb,
+      `<div class="provenance"><span class="label">OCR (extracted)</span>: ${ocr ? esc(ocr.slice(0, 280)) + (ocr.length > 280 ? '…' : '') : '<em class="muted">none</em>'}</div>`,
+      ai ? `<div class="provenance"><span class="label">AI description (inferred)</span>: ${esc(ai.slice(0, 320))}${ai.length > 320 ? '…' : ''}</div>` : ''
+    ].join('');
   } else {
     text.textContent = note.raw_text;
   }
@@ -328,7 +389,7 @@ function renderNote(note) {
     });
     actions.append(editButton, deleteButton);
   } else if (
-    (note.item_type === 'url' || note.item_type === 'pdf') &&
+    ['url', 'pdf', 'image', 'voice'].includes(note.item_type) &&
     note.processing_status === 'failed'
   ) {
     actions.append(
@@ -340,7 +401,7 @@ function renderNote(note) {
             'Unable to retry capture processing.'
           );
           root.replaceWith(renderNote(updated));
-          const label = note.item_type === 'pdf' ? 'PDF' : 'URL';
+          const label = captureTypeLabel(note.item_type);
           setStatus(
             'noteStatus',
             updated.processing_status === 'ready'
@@ -352,6 +413,17 @@ function renderNote(note) {
         } catch {
           setStatus('noteStatus', 'Retry failed.', true);
         }
+      })
+    );
+    actions.append(
+      actionButton('Delete', 'danger', () => {
+        deleteExistingNote(note, root, null, null);
+      })
+    );
+  } else if (note.item_type === 'image' && note.processing_status === 'ready') {
+    actions.append(
+      actionButton('Edit OCR text', 'secondary', () => {
+        showEditExtractedText(note, root);
       })
     );
     actions.append(
@@ -375,6 +447,60 @@ function renderNote(note) {
 
   root.append(text, time, actions);
   return root;
+}
+
+function showEditExtractedText(note, root) {
+  if (pendingNoteActions.has(note.id)) return;
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'note-edit-input';
+  textarea.maxLength = 20000;
+  textarea.value = note.extracted_text || '';
+
+  const hint = document.createElement('div');
+  hint.className = 'provenance';
+  hint.innerHTML = '<span class="label">Editing extracted / OCR text</span> (facts). AI description stays separate.';
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+
+  const saveButton = actionButton('Save OCR text', '', async () => {
+    if (pendingNoteActions.has(note.id)) return;
+    pendingNoteActions.add(note.id);
+    saveButton.disabled = true;
+    cancelButton.disabled = true;
+    saveButton.textContent = 'Saving…';
+    setStatus('noteStatus', 'Saving extracted text…');
+    try {
+      const updated = await fetchJson(
+        `/api/items/${note.id}/extracted-text`,
+        {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({extracted_text: textarea.value})
+        },
+        'Unable to update extracted text.'
+      );
+      root.replaceWith(renderNote(updated));
+      setStatus('noteStatus', 'Extracted text updated.');
+      await loadLatestAnalysis();
+    } catch {
+      setStatus('noteStatus', 'Could not update extracted text.', true);
+      saveButton.disabled = false;
+      cancelButton.disabled = false;
+      saveButton.textContent = 'Save OCR text';
+    } finally {
+      pendingNoteActions.delete(note.id);
+    }
+  });
+
+  const cancelButton = actionButton('Cancel', 'secondary', () => {
+    if (pendingNoteActions.has(note.id)) return;
+    root.replaceWith(renderNote(note));
+  });
+
+  actions.append(saveButton, cancelButton);
+  root.replaceChildren(hint, textarea, actions);
 }
 
 function showEditNote(note, root) {

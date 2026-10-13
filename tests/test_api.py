@@ -95,6 +95,7 @@ def test_create_and_list_canonical_text_item(client):
         "error_message": None,
         "storage_path": None,
         "extracted_text": None,
+        "ai_description": None,
         "created_at": item["created_at"],
         "updated_at": None,
     }
@@ -1426,3 +1427,122 @@ def test_blank_pdf_fails_with_helpful_message(client):
     ).json()
     assert item["processing_status"] == "failed"
     assert "image-only" in (item["error_message"] or "").lower()
+
+
+def test_image_capture_persists_before_processing_and_creates_preview(client, monkeypatch):
+    from tests.image_fixtures import make_png_bytes
+
+    main = sys.modules["app.main"]
+    database = sys.modules["app.database"]
+    original_add = database.add_image_item_to_db
+    png_bytes = make_png_bytes(text="Meeting notes")
+    seen = {"persisted": False}
+
+    def slow_add(filename, storage_path, mime_type):
+        item = original_add(filename, storage_path, mime_type)
+        seen["persisted"] = True
+        assert item["original_filename"] == "screenshot.png"
+        assert item["processing_status"] == "captured"
+        assert item["storage_path"]
+        return item
+
+    monkeypatch.setattr(main, "add_image_item_to_db", slow_add)
+    monkeypatch.setenv("LIFE_INBOX_DISABLE_OCR", "1")
+
+    item = client.post(
+        "/api/items/image",
+        files={"file": ("screenshot.png", png_bytes, "image/png")},
+    ).json()
+
+    assert seen["persisted"] is True
+    assert item["item_type"] == "image"
+    assert item["processing_status"] == "ready"
+    assert item["ai_description"]
+    assert "AI description" in (item["raw_text"] or "")
+    thumb = client.get(f"/api/items/{item['id']}/file", params={"variant": "thumb"})
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"].startswith("image/jpeg")
+    original = client.get(f"/api/items/{item['id']}/file")
+    assert original.status_code == 200
+    assert original.content.startswith(b"\x89PNG")
+
+
+def test_image_capture_rejects_invalid_uploads(client):
+    response = client.post(
+        "/api/items/image",
+        files={"file": ("notes.txt", b"not an image", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert "image" in response.json()["detail"].lower()
+
+
+def test_failed_image_capture_can_retry(client, monkeypatch):
+    from tests.image_fixtures import make_png_bytes
+
+    import app.main as main
+
+    real_process = main.process_image_bytes
+    calls = {"n": 0}
+
+    def flaky_process(data, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("Temporary image parse failure")
+        return real_process(data, **kwargs)
+
+    monkeypatch.setattr(main, "process_image_bytes", flaky_process)
+
+    first = client.post(
+        "/api/items/image",
+        files={"file": ("shot.png", make_png_bytes(), "image/png")},
+    ).json()
+    assert first["processing_status"] == "failed"
+
+    retry = client.post(f"/api/items/{first['id']}/retry").json()
+    assert retry["processing_status"] == "ready"
+    assert retry["ai_description"]
+
+
+def test_image_ocr_text_is_editable(client, monkeypatch):
+    from tests.image_fixtures import make_png_bytes
+
+    monkeypatch.setenv("LIFE_INBOX_DISABLE_OCR", "1")
+    item = client.post(
+        "/api/items/image",
+        files={"file": ("board.png", make_png_bytes(), "image/png")},
+    ).json()
+    assert item["processing_status"] == "ready"
+
+    updated = client.patch(
+        f"/api/items/{item['id']}/extracted-text",
+        json={"extracted_text": "User corrected OCR text about groceries"},
+    ).json()
+    assert updated["extracted_text"] == "User corrected OCR text about groceries"
+    assert "User corrected OCR text" in updated["raw_text"]
+    assert updated["ai_description"] == item["ai_description"]
+
+
+def test_analyze_includes_ready_image_items(client, monkeypatch):
+    from tests.image_fixtures import make_png_bytes
+
+    monkeypatch.setenv("LIFE_INBOX_DISABLE_OCR", "1")
+    image_item = client.post(
+        "/api/items/image",
+        files={"file": ("habits.png", make_png_bytes(text="Habits"), "image/png")},
+    ).json()
+    # Ensure searchable text exists even without OCR
+    client.patch(
+        f"/api/items/{image_item['id']}/extracted-text",
+        json={"extracted_text": "Habits screenshot reminder"},
+    )
+    image_item = client.get("/api/items").json()
+    image_item = next(i for i in image_item if i["item_type"] == "image")
+    assert image_item["processing_status"] == "ready"
+
+    analysis = client.post("/api/analyze").json()
+    ids = {
+        note["id"]
+        for bucket in analysis["buckets"]
+        for note in bucket["notes"]
+    }
+    assert image_item["id"] in ids
