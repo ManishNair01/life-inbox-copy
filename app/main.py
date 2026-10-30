@@ -56,6 +56,7 @@ from app.database import (
     set_task_status,
     snooze_task_in_db,
     AnalysisAlreadyRunning,
+    ItemVersionConflict,
     start_analysis_run,
     update_item_extracted_text,
     update_item_in_db,
@@ -585,6 +586,20 @@ def get_item_source_file(
     )
 
 
+def _version_conflict(exc: ItemVersionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "version_conflict",
+            "message": (
+                "This item was changed somewhere else since you opened it. "
+                "Reload to see the latest version."
+            ),
+            "current": exc.current,
+        },
+    )
+
+
 @app.patch("/api/items/{item_id}/extracted-text", response_model=InboxItem)
 def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
     item = get_item_from_db(item_id)
@@ -595,7 +610,14 @@ def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
             status_code=400,
             detail="Extracted text can only be edited for image, voice, or PDF items.",
         )
-    updated = update_item_extracted_text(item_id, payload.extracted_text)
+    try:
+        updated = update_item_extracted_text(
+            item_id,
+            payload.extracted_text,
+            expected_version=payload.expected_version,
+        )
+    except ItemVersionConflict as exc:
+        raise _version_conflict(exc) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail="Item not found.")
     return updated
@@ -661,7 +683,11 @@ def read_item(item_id: int):
 @app.put("/api/items/{item_id}", response_model=InboxItem)
 def update_item(item_id: int, payload: InboxItemUpdate):
     try:
-        item = update_item_in_db(item_id, payload.raw_text)
+        item = update_item_in_db(
+            item_id, payload.raw_text, expected_version=payload.expected_version
+        )
+    except ItemVersionConflict as exc:
+        raise _version_conflict(exc) from exc
     except Exception as exc:
         logger.exception("Failed to update inbox item")
         raise HTTPException(

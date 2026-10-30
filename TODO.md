@@ -43,7 +43,7 @@ explicit user confirmation, and AI-inferred content stays labelled.
       and whether a Gemini key is configured.
 
 ## Multi-user concurrency
-Status: 5 of 6 done. Remaining: per-item edit conflicts.
+Status: 6 of 6 done.
 - [x] **SQLite settings.** WAL plus an explicit 5 s busy timeout (the sqlite3
       driver already defaulted to 5 s, so WAL is the real change). Postgres is
       documented for more than a few active users.
@@ -56,5 +56,7 @@ Status: 5 of 6 done. Remaining: per-item edit conflicts.
 - [x] **Concurrency test.** `tests/test_concurrency.py`: 5 users in parallel doing
       capture, analyze, search, Ask and tasks against one temp DB; asserts no
       errors, disjoint ids, and no cross-user data in any response.
-- [ ] **Per-item edit conflicts** (version or `updated_at` check) for the same
-      user editing from two tabs or devices.
+- [x] **Per-item edit conflicts.** `inbox_items.version` (migration 0014), bumped on
+      every text change; `PUT /api/items/{id}` and `PATCH .../extracted-text` take
+      `expected_version` and return 409 with the current item; the UI keeps the
+      user's text and makes the next Save an explicit overwrite.

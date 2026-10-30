@@ -50,7 +50,9 @@ class InboxItemCreate(InboxItemText):
 
 
 class InboxItemUpdate(InboxItemText):
-    pass
+    # Version the client last read. When set, the edit is rejected with 409 if
+    # the item has changed since. Omit for last-write-wins (older clients).
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 class InboxItem(BaseModel):
@@ -69,6 +71,7 @@ class InboxItem(BaseModel):
     owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
+    version: int = 1
 
 
 class UrlItemCreate(BaseModel):
@@ -77,6 +80,7 @@ class UrlItemCreate(BaseModel):
 
 class ExtractedTextUpdate(BaseModel):
     extracted_text: str = Field(min_length=0, max_length=20000)
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 Priority = Literal["High", "Medium", "Low"]

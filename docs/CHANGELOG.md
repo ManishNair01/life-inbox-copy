@@ -73,6 +73,18 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   foreign keys. `docs/deployment.md` documents backups of the WAL files and when
   to move to Postgres.
 
+### Added: edit-conflict detection (optimistic concurrency)
+- Migration `0014_item_version` adds `inbox_items.version` (default 1). It is bumped
+  by user edits and by any ORM write that changes `raw_text`, `extracted_text` or
+  `ai_description` (capture retries, extraction), and returned as `InboxItem.version`.
+- `PUT /api/items/{id}` and `PATCH /api/items/{id}/extracted-text` accept an optional
+  `expected_version`. The write is a single conditional UPDATE, so it is atomic across
+  threads and workers; on mismatch the API returns 409 with
+  `detail: {code: "version_conflict", message, current}`. Without `expected_version`
+  (older clients, `/api/notes`) the edit is last-write-wins but still bumps the version.
+- UI: a 409 keeps the typed text and tells the user; the next Save overwrites knowingly.
+- `update_item_extracted_text` now also checks ownership itself (the API layer already did).
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,
@@ -83,7 +95,8 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   `test_migrations.py`, `test_pagination_state.py`.
 - `tests/test_concurrency.py` (5 users in parallel, no collisions or leaks),
   `tests/test_sqlite_settings.py` (WAL, busy timeout, parallel writers).
-- Suite: 155 passed with `GEMINI_API_KEY` unset.
+- `tests/test_edit_conflicts.py` (stale edits, simultaneous edits, ORM bumps, ownership).
+- Suite: 165 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to

@@ -139,7 +139,9 @@ async function fetchJson(url, options, friendlyError) {
   }
 
   if (!response.ok) {
-    throw new Error(friendlyError);
+    const failure = new Error(friendlyError);
+    failure.status = response.status;
+    throw failure;
   }
 
   if (response.status === 204) {
@@ -151,6 +153,20 @@ async function fetchJson(url, options, friendlyError) {
   } catch {
     throw new Error(friendlyError);
   }
+}
+
+const EDIT_CONFLICT_MESSAGE =
+  'This was changed in another tab or device. Your edit is kept here — ' +
+  'press Save again to overwrite it, or Cancel to keep the other version.';
+
+async function latestVersionOf(itemId, fallback) {
+  try {
+    const response = await fetch(`/api/items/${itemId}`);
+    if (response.ok) return (await response.json()).version;
+  } catch {
+    // Keep the old version, so the next Save conflicts again.
+  }
+  return fallback;
 }
 
 async function addNote() {
@@ -572,6 +588,7 @@ function showEditExtractedText(note, root) {
   textarea.className = 'note-edit-input';
   textarea.maxLength = 20000;
   textarea.value = note.extracted_text || '';
+  let expectedVersion = note.version;
 
   const hint = document.createElement('div');
   hint.className = 'provenance';
@@ -596,15 +613,24 @@ function showEditExtractedText(note, root) {
         {
           method: 'PATCH',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({extracted_text: textarea.value})
+          body: JSON.stringify({
+            extracted_text: textarea.value,
+            expected_version: expectedVersion
+          })
         },
         'Unable to update extracted text.'
       );
       root.replaceWith(renderNote(updated));
       setStatus('noteStatus', isVoice ? 'Transcript updated.' : 'Extracted text updated.');
       await loadLatestAnalysis();
-    } catch {
-      setStatus('noteStatus', 'Could not update extracted text.', true);
+    } catch (error) {
+      if (error.status === 409) {
+        // Keep the typed text; the next Save is an explicit overwrite.
+        expectedVersion = await latestVersionOf(note.id, expectedVersion);
+        setStatus('noteStatus', EDIT_CONFLICT_MESSAGE, true);
+      } else {
+        setStatus('noteStatus', 'Could not update extracted text.', true);
+      }
       saveButton.disabled = false;
       cancelButton.disabled = false;
       saveButton.textContent = isVoice ? 'Save transcript' : 'Save OCR text';
@@ -629,6 +655,7 @@ function showEditNote(note, root) {
   textarea.className = 'note-edit-input';
   textarea.maxLength = 2000;
   textarea.value = note.raw_text;
+  let expectedVersion = note.version;
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
@@ -654,7 +681,7 @@ function showEditNote(note, root) {
         {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({raw_text: text})
+          body: JSON.stringify({raw_text: text, expected_version: expectedVersion})
         },
         'Unable to update note.'
       );
@@ -662,12 +689,18 @@ function showEditNote(note, root) {
       root.replaceWith(renderNote(updatedNote));
       setStatus('noteStatus', 'Note updated.');
       await loadLatestAnalysis();
-    } catch {
-      setStatus(
-        'noteStatus',
-        'We could not update this note. Your changes are still here—please try again.',
-        true
-      );
+    } catch (error) {
+      if (error.status === 409) {
+        // Keep the typed text; the next Save is an explicit overwrite.
+        expectedVersion = await latestVersionOf(note.id, expectedVersion);
+        setStatus('noteStatus', EDIT_CONFLICT_MESSAGE, true);
+      } else {
+        setStatus(
+          'noteStatus',
+          'We could not update this note. Your changes are still here—please try again.',
+          true
+        );
+      }
       saveButton.disabled = false;
       cancelButton.disabled = false;
       saveButton.textContent = 'Save';

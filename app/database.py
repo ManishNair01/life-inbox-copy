@@ -25,9 +25,11 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    update,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.capture.pipeline import (
@@ -138,6 +140,31 @@ class InboxItemRecord(Base):
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
+    # Bumped on every change to the item's text so clients can detect that
+    # they are editing a stale copy (optimistic concurrency).
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+
+
+_VERSIONED_FIELDS = ("raw_text", "extracted_text", "ai_description")
+
+
+@event.listens_for(InboxItemRecord, "before_update")
+def _bump_item_version(mapper, connection, target):
+    """Any ORM write that changes item text (capture retries, extraction) bumps
+    the version, so a client holding an older version gets a conflict."""
+    state = sa_inspect(target)
+    if state.attrs.version.history.has_changes():
+        return
+    if any(state.attrs[name].history.has_changes() for name in _VERSIONED_FIELDS):
+        target.version = (target.version or 1) + 1
+
+
+class ItemVersionConflict(Exception):
+    """The item changed since the client last read it."""
+
+    def __init__(self, current: dict):
+        super().__init__("Item was modified by another request")
+        self.current = current
 
 
 class AnalysisRunRecord(Base):
@@ -444,6 +471,7 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "version": item.version or 1,
     }
 
 
@@ -561,7 +589,46 @@ def compute_inbox_fingerprint(session=None) -> str:
         return _fingerprint(owned_session)
 
 
-def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
+def _apply_item_edit(
+    session,
+    item: InboxItemRecord,
+    values: dict,
+    expected_version: Optional[int],
+) -> dict:
+    """Write a user edit as one conditional UPDATE (compare-and-set).
+
+    With ``expected_version`` the write only happens if the row still has that
+    version, which is atomic even across threads and worker processes. Without
+    it (older clients) the edit is last-write-wins, as before. Either way the
+    version is incremented.
+    """
+    conditions = [InboxItemRecord.id == item.id]
+    if expected_version is not None:
+        conditions.append(InboxItemRecord.version == expected_version)
+    result = session.execute(
+        update(InboxItemRecord)
+        .where(*conditions)
+        .values(
+            **values,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            version=InboxItemRecord.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        session.rollback()
+        session.refresh(item)
+        raise ItemVersionConflict(_item_to_dict(item))
+    session.commit()
+    session.refresh(item)
+    return _item_to_dict(item)
+
+
+def update_item_in_db(
+    item_id: int,
+    raw_text: str,
+    expected_version: Optional[int] = None,
+) -> Optional[dict]:
     owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
@@ -572,10 +639,9 @@ def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
         ):
             return None
 
-        item.raw_text = raw_text
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+        return _apply_item_edit(
+            session, item, {"raw_text": raw_text}, expected_version
+        )
 
 
 def _remove_orphan_tasks(session, item_ids: list[int]) -> None:
@@ -1194,27 +1260,31 @@ def complete_voice_item_processing(
 def update_item_extracted_text(
     item_id: int,
     extracted_text: str,
+    expected_version: Optional[int] = None,
 ) -> Optional[dict]:
     """User edit of extracted/OCR/transcript text (facts), preserving AI description."""
     cleaned = extracted_text.strip()
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
-        if item is None:
+        if item is None or item.owner_user_id != owner_id:
             return None
         if item.item_type not in {IMAGE_ITEM_TYPE, VOICE_ITEM_TYPE, PDF_ITEM_TYPE}:
             return None
-        item.extracted_text = cleaned
         if item.item_type == IMAGE_ITEM_TYPE and item.ai_description:
-            item.raw_text = (
+            raw_text = (
                 f"{cleaned}\n\n[AI description — inferred]\n{item.ai_description}"
                 if cleaned
                 else f"[AI description — inferred]\n{item.ai_description}"
             )
         else:
-            item.raw_text = cleaned
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+            raw_text = cleaned
+        return _apply_item_edit(
+            session,
+            item,
+            {"extracted_text": cleaned, "raw_text": raw_text},
+            expected_version,
+        )
 
 
 def add_url_item_to_db(url: str) -> dict:
