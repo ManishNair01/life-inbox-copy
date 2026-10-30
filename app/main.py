@@ -68,7 +68,7 @@ from app.integrations.calendar import (
     get_draft,
     store_draft,
 )
-from app.organizer import analyze_inbox_with_openai, validate_analysis_result
+from app.organizer import analyze_inbox_with_gemini, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
@@ -1196,7 +1196,7 @@ def analyze_inbox():
     try:
         run_id = start_analysis_run()
         notes = list_notes_from_db()
-        raw_result = analyze_inbox_with_openai(notes)
+        raw_result = analyze_inbox_with_gemini(notes)
         result = validate_analysis_result(raw_result, notes)
         return complete_analysis_run(run_id, result)
     except Exception as exc:
