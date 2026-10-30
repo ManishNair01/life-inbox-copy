@@ -18,8 +18,9 @@ Suggested next steps, in order:
 3. Real image understanding (the plumbing already exists).
 
 ## Branch and review
-- [ ] **Push `feat/gemini-backend` and open a PR** (14 commits ahead of where this
-      work started). Pushing is outward-facing, so do it only when asked.
+- [ ] **Push `feat/gemini-backend` and open a PR** (18 commits ahead of
+      `origin/main`, which has since gained 12 commits; a merge currently conflicts in
+      7 files, see the draft PR notes). Pushing is outward-facing, so do it only when asked.
 - [ ] **Optional: tidy history.** Commit `c9de62a` alone fails to import `app.main`
       because `app/main.py` was fixed in the follow-up `b8e94e3`. Squashing them would
       keep `git bisect` clean, but AGENTS.md forbids history rewrites, so leave it
