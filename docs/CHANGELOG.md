@@ -94,7 +94,12 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   without contacting the API; analysis, Ask and voice use their fallbacks, and voice
   notes explain the limit was reached. If the usage table is unreadable the call is
   allowed (cost control, not security) and a warning is logged.
-- `GET /api/usage` reports `day`, `calls`, `limit`, `remaining` for the signed-in user.
+- `GET /api/usage` reports `day`, `calls`, `limit`, `remaining` and `ai_enabled` for the
+  signed-in user.
+- UI: usage line under the Analyze button, a warning banner at the limit, and fresh
+  Analyze/Ask results state when they used basic methods because of the limit. The
+  line is hidden when no key or no limit is set, and fallbacks are only attributed to
+  the limit when AI is enabled (checked in a browser).
 - Tests stay off the usage table by default (`GEMINI_DAILY_CALL_LIMIT=0` in conftest).
 
 ### Tests
@@ -109,7 +114,7 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   `tests/test_sqlite_settings.py` (WAL, busy timeout, parallel writers).
 - `tests/test_edit_conflicts.py` (stale edits, simultaneous edits, ORM bumps, ownership).
 - `tests/test_gemini_quota.py` (limit, per-user, daily reset, atomicity, fallbacks).
-- Suite: 175 passed with `GEMINI_API_KEY` unset.
+- Suite: 176 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to

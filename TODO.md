@@ -42,8 +42,10 @@ explicit user confirmation, and AI-inferred content stays labelled.
       `GET /api/usage`, fallbacks when exhausted.
 - [ ] **Circuit breaker after repeated 429s** from Gemini (pause calls for a
       cool-down instead of spending quota on calls that will fail).
-- [ ] **Quota visibility in the UI** (show remaining calls; say why a fallback
-      was used).
+- [x] **Quota visibility in the UI.** Usage line under Analyze ("AI usage today: N of
+      M calls", "(K left)" near the limit), a warning banner when the limit is reached,
+      and fresh Analyze/Ask results say when they used basic methods because of it.
+      Hidden when no key or no limit is configured.
 - [ ] **`/healthz`:** report DB reachability, whether the embedding model loaded,
       and whether a Gemini key is configured.
 

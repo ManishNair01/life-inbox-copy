@@ -235,3 +235,11 @@ def test_each_user_gets_their_own_allowance_in_parallel(client, monkeypatch):  #
     for status, usage in outcomes.values():
         assert status == 200
         assert usage["calls"] <= 2
+
+
+def test_usage_reports_whether_ai_is_enabled(client, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("GEMINI_DAILY_CALL_LIMIT", "4")
+    assert client.get("/api/usage").json()["ai_enabled"] is False
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    assert client.get("/api/usage").json()["ai_enabled"] is True

@@ -160,7 +160,9 @@ def ai_usage():
     from app import gemini
     from app.database import get_ai_usage
 
-    return get_ai_usage(gemini.daily_call_limit())
+    usage = get_ai_usage(gemini.daily_call_limit())
+    usage["ai_enabled"] = gemini.api_key() is not None
+    return usage
 
 
 @app.get("/api/auth/me")

@@ -16,6 +16,40 @@ function setStatus(elementId, message, isError = false) {
   element.classList.toggle('error', isError);
 }
 
+// Today's AI usage for the signed-in user (GET /api/usage), or null if unknown.
+let aiUsage = null;
+
+function aiLimitReached() {
+  return Boolean(aiUsage && aiUsage.limit !== null && aiUsage.remaining === 0);
+}
+
+async function loadAiUsage() {
+  const element = document.getElementById('aiUsage');
+  try {
+    aiUsage = await fetchJson('/api/usage', {}, 'Unable to load AI usage.');
+  } catch {
+    aiUsage = null;
+  }
+  // No AI configured, no limit set, or usage unavailable: show nothing, and
+  // never blame fallbacks on a limit.
+  if (!aiUsage || !aiUsage.ai_enabled || aiUsage.limit === null) {
+    aiUsage = null;
+    element.hidden = true;
+    return;
+  }
+  element.hidden = false;
+  const reached = aiLimitReached();
+  element.classList.toggle('banner', reached);
+  element.classList.toggle('warn', reached);
+  element.textContent = reached
+    ? 'Daily AI limit reached. Analyze, Ask and voice transcription use basic ' +
+      'methods without AI until 00:00 UTC.'
+    : `AI usage today: ${aiUsage.calls} of ${aiUsage.limit} calls` +
+      (aiUsage.remaining <= Math.ceil(aiUsage.limit * 0.1)
+        ? ` (${aiUsage.remaining} left)`
+        : '');
+}
+
 function setButtonBusy(buttonId, busy, busyLabel, idleLabel) {
   const button = document.getElementById(buttonId);
   button.disabled = busy;
@@ -327,6 +361,7 @@ async function uploadVoiceFile(file, statusMessage) {
     await loadNotes();
     await loadLatestAnalysis();
     await loadDashboard();
+    await loadAiUsage();
   } catch {
     setStatus('noteStatus', 'We could not upload that voice note.', true);
   } finally {
@@ -1033,7 +1068,14 @@ async function analyzeInbox() {
     await loadTasks();
     await loadTopics();
     await loadDashboard();
-    setStatus('analysisStatus', 'Analysis complete.');
+    await loadAiUsage();
+    // This result is fresh, so the limit is a fair explanation for a fallback.
+    setStatus(
+      'analysisStatus',
+      aiLimitReached() && data.mode === 'fallback_after_api_error'
+        ? 'Analysis complete using basic organization. Your daily AI limit is reached.'
+        : 'Analysis complete.'
+    );
   } catch {
     setStatus(
       'analysisStatus',
@@ -1323,7 +1365,15 @@ async function askInbox(event) {
       'Unable to answer from your inbox.'
     );
     renderAskResponse(data);
-    setStatus('askStatus', data.confidence === 'insufficient' ? 'Not enough evidence in your inbox.' : 'Answer ready.');
+    await loadAiUsage();
+    setStatus(
+      'askStatus',
+      data.confidence === 'insufficient'
+        ? 'Not enough evidence in your inbox.'
+        : aiLimitReached() && data.mode !== 'llm_grounded'
+          ? 'Answer ready (matched from your notes without AI: daily AI limit reached).'
+          : 'Answer ready.'
+    );
   } catch {
     setStatus('askStatus', 'Ask My Inbox failed.', true);
   } finally {
@@ -1446,6 +1496,7 @@ async function loadAuthUser() {
   } catch {
     document.getElementById('authUser').textContent = 'Not signed in';
   }
+  await loadAiUsage();
 }
 
 async function devLogin(event) {

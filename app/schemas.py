@@ -79,6 +79,9 @@ class UrlItemCreate(BaseModel):
 
 
 class AIUsage(BaseModel):
+    # False when no Gemini key is configured: no AI calls are made, so the
+    # quota is irrelevant and fallbacks are not caused by it.
+    ai_enabled: bool = True
     day: str
     calls: int
     limit: Optional[int] = None

@@ -121,7 +121,8 @@ is stored in the database.
   call counts once even if it is retried internally, and a call that fails
   still counts. Past the limit each feature uses its fallback (and a voice
   note says the limit was reached). `GET /api/usage` returns today's
-  `calls`, `limit` and `remaining`. If the usage table cannot be read, calls are
+  `calls`, `limit`, `remaining` and `ai_enabled` (false when no key is set). The page
+  shows this under the Analyze button and warns when the limit is reached. If the usage table cannot be read, calls are
   allowed and a warning is logged.
 - A user can have only one analysis running at a time (database-enforced).
   A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
