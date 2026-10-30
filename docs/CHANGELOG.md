@@ -114,6 +114,17 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
 - `embeddings.status()` reports model state without loading it.
 - Dockerfile `HEALTHCHECK` uses it (not built here: Docker is not installed).
 
+### Added: circuit breaker for Gemini 429s
+- After 3 consecutive 429s, `app/gemini.py` pauses calls for the response's
+  `Retry-After` (capped at 900 s) or `GEMINI_RATE_LIMIT_COOLDOWN_SECONDS` (default 60,
+  `0` disables). The breaker is checked before the daily quota is charged, so paused
+  calls cost no allowance. Success resets the count; the first call after the
+  cool-down is a probe and another 429 reopens the breaker. State is per process.
+- New `GeminiUnavailable` base class for `GeminiBusy`, `GeminiQuotaExceeded` and the
+  new `GeminiRateLimited`. Analysis and Ask log these as one-line warnings (no stack
+  trace per request) and use their fallbacks; voice notes say the service is busy.
+- `rate_limited` is reported by `GET /api/usage` and `/healthz` (which stays 200).
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,
@@ -128,7 +139,9 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
 - `tests/test_gemini_quota.py` (limit, per-user, daily reset, atomicity, fallbacks).
 - `tests/test_healthz.py` (ready, 503 on DB down or stale schema, degraded, no secrets,
   no side effects).
-- Suite: 185 passed with `GEMINI_API_KEY` unset.
+- `tests/test_gemini_breaker.py` (trip, reset, Retry-After, probe, disable, quota not spent,
+  quiet fallbacks).
+- Suite: 196 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to

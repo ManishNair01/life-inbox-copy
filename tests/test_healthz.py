@@ -19,7 +19,11 @@ def test_healthz_reports_ready_without_authentication(client):  # noqa: F811
     # Tests build the schema without Alembic, so there is no version to compare.
     assert body["schema"] == "unknown"
     assert body["embeddings"] == "disabled"
-    assert body["gemini"] == {"configured": False, "daily_limit_per_user": None}
+    assert body["gemini"] == {
+        "configured": False,
+        "rate_limited": False,
+        "daily_limit_per_user": None,
+    }
 
 
 def test_healthz_never_exposes_secrets_or_error_text(client, monkeypatch):  # noqa: F811
@@ -31,6 +35,7 @@ def test_healthz_never_exposes_secrets_or_error_text(client, monkeypatch):  # no
     assert "super-secret-key-value" not in body
     assert client.get("/healthz").json()["gemini"] == {
         "configured": True,
+        "rate_limited": False,
         "daily_limit_per_user": 25,
     }
 

@@ -253,6 +253,12 @@ Saved notes:
         result["mode"] = "gemini"
         return validate_analysis_result(result, notes)
 
+    except gemini.GeminiUnavailable as exc:
+        logger.warning("Gemini not used (%s); using deterministic fallback", exc)
+        fallback = fallback_analyze(notes)
+        fallback["mode"] = "fallback_after_api_error"
+        return validate_analysis_result(fallback, notes)
+
     except Exception:
         logger.exception("Gemini analysis failed; using deterministic fallback")
         fallback = fallback_analyze(notes)

@@ -40,8 +40,10 @@ explicit user confirmation, and AI-inferred content stays labelled.
 - [x] **Per-user Gemini daily quota.** `ai_usage` table (migration 0015),
       `GEMINI_DAILY_CALL_LIMIT` (default 100, 0 = off), atomic conditional UPDATE,
       `GET /api/usage`, fallbacks when exhausted.
-- [ ] **Circuit breaker after repeated 429s** from Gemini (pause calls for a
-      cool-down instead of spending quota on calls that will fail).
+- [x] **Circuit breaker after repeated 429s.** 3 in a row pause Gemini calls for
+      `Retry-After` (capped) or `GEMINI_RATE_LIMIT_COOLDOWN_SECONDS` (default 60);
+      quota is not spent while paused; reported in `/api/usage` and `/healthz`.
+- [ ] **Show the pause in the UI** (a banner when `/api/usage` says `rate_limited`).
 - [x] **Quota visibility in the UI.** Usage line under Analyze ("AI usage today: N of
       M calls", "(K left)" near the limit), a warning banner when the limit is reached,
       and fresh Analyze/Ask results say when they used basic methods because of it.

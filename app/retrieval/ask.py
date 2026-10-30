@@ -263,6 +263,8 @@ def build_grounded_answer(
                     "answer_kind": "model_generated",
                     "mode": "llm_grounded",
                 }
+        except gemini.GeminiUnavailable as exc:
+            logger.warning("Ask My Inbox not using Gemini (%s); extractive fallback", exc)
         except Exception:
             logger.exception(
                 "Ask My Inbox LLM synthesis failed; using extractive fallback"

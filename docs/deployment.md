@@ -124,6 +124,13 @@ is stored in the database.
   `calls`, `limit`, `remaining` and `ai_enabled` (false when no key is set). The page
   shows this under the Analyze button and warns when the limit is reached. If the usage table cannot be read, calls are
   allowed and a warning is logged.
+- After 3 consecutive `429` responses from Gemini the process stops calling it for a
+  cool-down (the response's `Retry-After`, capped at 15 minutes, else
+  `GEMINI_RATE_LIMIT_COOLDOWN_SECONDS`, default 60; `0` disables). While paused,
+  features use their fallbacks immediately, and the daily quota is not spent.
+  The first call after the cool-down is a probe: success closes the breaker, another
+  429 reopens it. The state is per process because the rate limit belongs to the API
+  key. `GET /api/usage` and `/healthz` report `rate_limited`; `/healthz` stays 200.
 - A user can have only one analysis running at a time (database-enforced).
   A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
   10 minutes is treated as crashed and expired.

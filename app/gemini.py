@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 import os
 import threading
 import time
@@ -26,12 +27,94 @@ DEFAULT_MAX_CONCURRENT = 4
 SLOT_WAIT_SECONDS = 20
 
 
-class GeminiBusy(Exception):
+class GeminiUnavailable(Exception):
+    """Gemini was deliberately not called; callers use their normal fallback.
+
+    Expected operating conditions, not bugs, so callers log them briefly.
+    """
+
+
+class GeminiBusy(GeminiUnavailable):
     """Too many Gemini calls are already in flight."""
 
 
-class GeminiQuotaExceeded(Exception):
+class GeminiQuotaExceeded(GeminiUnavailable):
     """The current user used up today's Gemini call allowance."""
+
+
+class GeminiRateLimited(GeminiUnavailable):
+    """Gemini keeps answering 429, so calls are paused for a cool-down."""
+
+
+# Circuit breaker. After RATE_LIMIT_THRESHOLD consecutive 429s, stop calling for
+# a cool-down (the response's Retry-After when it gives one, capped) instead of
+# making calls that will fail and, with the daily quota, spending allowance on
+# them. The limit is per API key, so the state is per process, not per user.
+# GEMINI_RATE_LIMIT_COOLDOWN_SECONDS=0 disables the breaker.
+RATE_LIMIT_THRESHOLD = 3
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60
+MAX_RATE_LIMIT_COOLDOWN_SECONDS = 900
+
+_breaker_lock = threading.Lock()
+_consecutive_rate_limits = 0
+_paused_until = 0.0  # time.monotonic() value
+
+
+def rate_limit_cooldown() -> int:
+    raw = os.getenv("GEMINI_RATE_LIMIT_COOLDOWN_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+
+
+def rate_limit_retry_after() -> int:
+    """Whole seconds until calls resume; 0 when the breaker is closed."""
+    with _breaker_lock:
+        remaining = _paused_until - time.monotonic()
+    return math.ceil(remaining) if remaining > 0 else 0
+
+
+def rate_limited() -> bool:
+    return rate_limit_retry_after() > 0
+
+
+def _check_breaker() -> None:
+    wait = rate_limit_retry_after()
+    if wait > 0:
+        raise GeminiRateLimited(
+            f"Gemini is rate-limiting requests; paused for about {wait} more seconds."
+        )
+
+
+def _record_rate_limit(response) -> None:
+    global _consecutive_rate_limits, _paused_until
+    cooldown = rate_limit_cooldown()
+    if cooldown <= 0:
+        return
+    headers = getattr(response, "headers", None) or {}
+    try:
+        cooldown = int(float(headers.get("Retry-After", cooldown)))
+    except (TypeError, ValueError):
+        pass
+    cooldown = min(max(cooldown, 1), MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+    with _breaker_lock:
+        _consecutive_rate_limits += 1
+        if _consecutive_rate_limits >= RATE_LIMIT_THRESHOLD:
+            _paused_until = time.monotonic() + cooldown
+            logger.warning(
+                "Gemini returned 429 %d times in a row; pausing calls for %d s",
+                _consecutive_rate_limits,
+                cooldown,
+            )
+
+
+def _record_success() -> None:
+    global _consecutive_rate_limits
+    with _breaker_lock:
+        _consecutive_rate_limits = 0
 
 
 # Per user per UTC day; 0 disables the quota. Counts calls we make (a call that
@@ -112,7 +195,9 @@ def _post(model: str, body: dict) -> dict:
                     timeout=TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                _record_success()
+                return payload
             finally:
                 _slots.release()
         except (requests.Timeout, requests.ConnectionError):
@@ -121,6 +206,8 @@ def _post(model: str, body: dict) -> dict:
             logger.warning("Gemini request failed (attempt %d); retrying", attempt)
         except requests.HTTPError as error:
             status = error.response.status_code if error.response is not None else None
+            if status == 429:
+                _record_rate_limit(error.response)
             if status not in RETRYABLE_STATUSES or attempt == MAX_ATTEMPTS:
                 raise
             logger.warning("Gemini returned %s (attempt %d); retrying", status, attempt)
@@ -134,6 +221,7 @@ def _text_of(data: dict) -> str:
 
 
 def generate_text(prompt: str) -> str:
+    _check_breaker()
     _charge_quota()
     data = _post(
         generation_model(),
@@ -143,6 +231,7 @@ def generate_text(prompt: str) -> str:
 
 
 def transcribe_audio(data: bytes, mime_type: str) -> str:
+    _check_breaker()
     _charge_quota()
     encoded = base64.b64encode(data).decode("ascii")
     response = _post(

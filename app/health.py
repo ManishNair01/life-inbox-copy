@@ -88,6 +88,7 @@ def readiness() -> tuple[dict, bool]:
             "embeddings": embedding_status,
             "gemini": {
                 "configured": gemini.api_key() is not None,
+                "rate_limited": gemini.rate_limited(),
                 "daily_limit_per_user": limit if limit > 0 else None,
             },
         },

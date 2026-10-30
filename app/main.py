@@ -178,6 +178,7 @@ def ai_usage():
 
     usage = get_ai_usage(gemini.daily_call_limit())
     usage["ai_enabled"] = gemini.api_key() is not None
+    usage["rate_limited"] = gemini.rate_limited()
     return usage
 
 

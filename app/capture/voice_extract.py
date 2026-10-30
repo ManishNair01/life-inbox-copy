@@ -158,6 +158,18 @@ def transcribe_audio(
             "available": True,
             "note": None if text else "Transcription returned no spoken text.",
         }
+    except gemini.GeminiRateLimited:
+        logger.warning("Gemini is rate-limiting; skipping transcription for now")
+        return {
+            "text": "",
+            "provider": "unavailable",
+            "available": False,
+            "note": (
+                "The AI service is busy right now, so this recording was not "
+                "transcribed. You can edit the transcript manually, or retry "
+                "processing in a few minutes."
+            ),
+        }
     except gemini.GeminiQuotaExceeded:
         logger.warning("Daily Gemini limit reached; skipping transcription")
         return {
