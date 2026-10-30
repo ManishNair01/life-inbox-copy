@@ -96,3 +96,25 @@ def test_pairwise_similarity_maps_identical_to_one_and_orthogonal_to_zero():
     matrix = embeddings.pairwise_similarity([a, b])
     assert matrix[0, 0] == pytest.approx(1.0)
     assert matrix[0, 1] == 0.0
+
+
+def test_cache_cleared_mid_call_does_not_break_embedding(enabled, monkeypatch):
+    """Another request clearing the cache mid-call must not force a fallback."""
+
+    class ClearingModel:
+        def passage_embed(self, texts):
+            # Simulates a concurrent request hitting the size cap and clearing.
+            embeddings._cache.clear()
+            for text in texts:
+                yield np.array([float(len(text)), 1.0], dtype=np.float32)
+
+    monkeypatch.setattr(embeddings, "_load_model", lambda: ClearingModel())
+    monkeypatch.setattr(embeddings, "_model_name", "fake")
+    cached = np.array([1.0, 0.0], dtype=np.float32)
+    embeddings._cache[("fake", "already cached")] = cached
+
+    result = embeddings.embed_passages(["already cached", "brand new"])
+
+    assert result is not None
+    assert len(result) == 2
+    np.testing.assert_allclose(result[0], cached)

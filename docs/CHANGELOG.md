@@ -63,6 +63,11 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
 - `POST /api/analyze` returns 409 if one is already running; runs left `running`
   for over 10 minutes are treated as crashed and expired.
 
+### Fixed: embedding cache race
+- `embed_passages` now guards the shared cache with a lock and reads from a local
+  snapshot, so one request clearing the cache can no longer raise `KeyError` in
+  another and silently degrade it to keyword search.
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,

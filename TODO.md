@@ -43,7 +43,7 @@ explicit user confirmation, and AI-inferred content stays labelled.
       and whether a Gemini key is configured.
 
 ## Multi-user concurrency
-Status: phase 1 of 5 done (analysis guard). Next: embedding cache race, SQLite WAL, Gemini cap, parallel-users test.
+Status: phases 1-2 of 5 done (analysis guard, embedding cache race). Next: SQLite WAL, Gemini cap, parallel-users test.
 - [ ] **SQLite settings:** enable WAL and a `busy_timeout` (no `journal_mode` or
       `busy_timeout` is set today), or document Postgres as required for more
       than one active user.
@@ -52,7 +52,7 @@ Status: phase 1 of 5 done (analysis guard). Next: embedding cache race, SQLite W
       writers. Reject or reuse the in-flight run.
 - [ ] **Global cap on concurrent Gemini calls** (semaphore) so slow calls with
       retries cannot exhaust the threadpool.
-- [ ] **Fix the embedding cache race.** `_cache` in `app/retrieval/embeddings.py`
+- [x] **Fix the embedding cache race.** *(Phase 2, done: cache guarded by its own lock, lookups use a local snapshot.)* `_cache` in `app/retrieval/embeddings.py`
       is mutated without the lock, and `_cache.clear()` during another request's
       lookup raises `KeyError`, which is caught and silently becomes a fallback.
 - [ ] **Concurrency test:** N users doing capture, search and analyze in parallel

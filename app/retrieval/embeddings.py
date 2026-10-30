@@ -23,6 +23,9 @@ SIMILARITY_FLOOR = 0.45
 _MAX_CACHED_TEXTS = 20000
 
 _lock = threading.Lock()
+# Guards _cache only. Kept separate from _lock so a slow model load never blocks
+# cache reads; never held while the model runs.
+_cache_lock = threading.Lock()
 _model = None
 _model_name: Optional[str] = None
 _load_failed = False
@@ -58,7 +61,8 @@ def _load_model():
             _model = TextEmbedding(name)
             _model_name = name
             _load_failed = False
-            _cache.clear()
+            with _cache_lock:
+                _cache.clear()
         except Exception:
             logger.warning(
                 "Embedding model %s unavailable; using TF-IDF fallback",
@@ -85,13 +89,27 @@ def embed_passages(texts: list[str]) -> Optional[list[np.ndarray]]:
         return None
     key = _model_name or model_name()
     try:
-        missing = [t for t in dict.fromkeys(texts) if (key, t) not in _cache]
+        # Work from a local snapshot: another request may clear the shared
+        # cache at any point, and a lookup must never depend on it afterwards.
+        with _cache_lock:
+            found = {
+                t: _cache[(key, t)]
+                for t in dict.fromkeys(texts)
+                if (key, t) in _cache
+            }
+        missing = [t for t in dict.fromkeys(texts) if t not in found]
         if missing:
-            for text, vec in zip(missing, model.passage_embed(missing)):
-                if len(_cache) >= _MAX_CACHED_TEXTS:
+            fresh = {
+                text: _unit(vec)
+                for text, vec in zip(missing, model.passage_embed(missing))
+            }
+            found.update(fresh)
+            with _cache_lock:
+                if len(_cache) + len(fresh) > _MAX_CACHED_TEXTS:
                     _cache.clear()
-                _cache[(key, text)] = _unit(vec)
-        return [_cache[(key, t)] for t in texts]
+                for text, vec in fresh.items():
+                    _cache[(key, text)] = vec
+        return [found[t] for t in texts]
     except Exception:
         logger.warning("Embedding passages failed; using fallback", exc_info=True)
         return None
