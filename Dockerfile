@@ -5,10 +5,16 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     LIFE_INBOX_ENV=beta \
-    LIFE_INBOX_UPLOAD_DIR=/data/uploads
+    LIFE_INBOX_UPLOAD_DIR=/data/uploads \
+    FASTEMBED_CACHE_PATH=/opt/fastembed
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Bake the embedding model into the image so the first request does not need
+# network access. If this step fails the build fails; the app itself would
+# otherwise degrade to keyword search at runtime.
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
 
 COPY . .
 
