@@ -5,6 +5,38 @@ Recommended work, roughly in priority order. Check items off and move them to
 DB, no new frontend framework, schema changes via Alembic, external actions need
 explicit user confirmation, and AI-inferred content stays labelled.
 
+## Status (branch `feat/gemini-backend`)
+Done and committed: Gemini backend, local embeddings and semantic linking,
+concurrency hardening (6 of 6), per-user Gemini quota with UI, `/healthz`, and the
+429 circuit breaker. The suite passes (196 tests). Nothing is pushed and no PR is
+open. Operations has one open item (breaker banner); everything else below is new
+feature work.
+
+Suggested next steps, in order:
+1. Push the branch and open a PR for review.
+2. Persist embeddings (the scaling cliff).
+3. Real image understanding (the plumbing already exists).
+
+## Branch and review
+- [ ] **Push `feat/gemini-backend` and open a PR** (14 commits ahead of where this
+      work started). Pushing is outward-facing, so do it only when asked.
+- [ ] **Optional: tidy history.** Commit `c9de62a` alone fails to import `app.main`
+      because `app/main.py` was fixed in the follow-up `b8e94e3`. Squashing them would
+      keep `git bisect` clean, but AGENTS.md forbids history rewrites, so leave it
+      unless explicitly approved.
+
+## Not yet verified
+- [ ] **Edit-conflict UI in a browser.** Only `node --check` was run on the JS. Open
+      one item in two tabs, save in one, then save in the other: expect the conflict
+      message, the typed text kept, and the next Save overwriting.
+- [ ] **Quota line with no API key** (should be hidden) and **voice upload** with the
+      limit reached were not clicked through. The server side is tested.
+- [ ] **Docker image build.** Docker is not installed here, so the model prefetch step
+      and the `HEALTHCHECK` line have never been built or run in a container. (The
+      health-check command itself was run against a live server: exit 0 when ready,
+      exit 1 on 503.)
+- [ ] **A real Gemini 429.** The breaker is tested with simulated responses only.
+
 ## Finish what is half-built
 - [ ] **Persist embeddings.** Store vectors (blob column keyed by item id, text
       hash and model name) so restarts do not re-embed the inbox and relations
@@ -44,6 +76,12 @@ explicit user confirmation, and AI-inferred content stays labelled.
       `Retry-After` (capped) or `GEMINI_RATE_LIMIT_COOLDOWN_SECONDS` (default 60);
       quota is not spent while paused; reported in `/api/usage` and `/healthz`.
 - [ ] **Show the pause in the UI** (a banner when `/api/usage` says `rate_limited`).
+      Check it in a browser as was done for the quota line, and only attribute a
+      fresh fallback to the pause when AI is enabled.
+- [ ] **Breaker follow-ups (optional).** State is per process, so with several
+      workers each learns about a 429 streak on its own (share it via the database if
+      that matters). After a cool-down every concurrent call is a probe, not just one;
+      add single-probe logic if bursts after a pause become a problem.
 - [x] **Quota visibility in the UI.** Usage line under Analyze ("AI usage today: N of
       M calls", "(K left)" near the limit), a warning banner when the limit is reached,
       and fresh Analyze/Ask results say when they used basic methods because of it.
