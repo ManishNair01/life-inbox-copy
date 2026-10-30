@@ -115,6 +115,14 @@ is stored in the database.
   process, so slow calls cannot occupy every server thread. A request that
   cannot get a slot within 20 s uses the normal fallback (keyword search,
   extractive answer, deterministic analysis, empty transcript).
+- Each user may make `GEMINI_DAILY_CALL_LIMIT` Gemini calls per UTC day (default
+  100; `0` disables the quota). The count is kept in the `ai_usage` table and
+  checked with one atomic UPDATE, so it holds across threads and workers. A
+  call counts once even if it is retried internally, and a call that fails
+  still counts. Past the limit each feature uses its fallback (and a voice
+  note says the limit was reached). `GET /api/usage` returns today's
+  `calls`, `limit` and `remaining`. If the usage table cannot be read, calls are
+  allowed and a warning is logged.
 - A user can have only one analysis running at a time (database-enforced).
   A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
   10 minutes is treated as crashed and expired.

@@ -85,6 +85,18 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
 - UI: a 409 keeps the typed text and tells the user; the next Save overwrites knowingly.
 - `update_item_extracted_text` now also checks ownership itself (the API layer already did).
 
+### Added: per-user Gemini daily quota
+- Migration `0015_ai_usage` and an `ai_usage` table (user, UTC day, calls).
+- `GEMINI_DAILY_CALL_LIMIT` (default 100 per user per UTC day, `0` disables). One
+  conditional UPDATE both checks and increments, so concurrent requests cannot go
+  over the limit. A call counts once even when retried; failed calls still count.
+- Past the limit `generate_text` and `transcribe_audio` raise `GeminiQuotaExceeded`
+  without contacting the API; analysis, Ask and voice use their fallbacks, and voice
+  notes explain the limit was reached. If the usage table is unreadable the call is
+  allowed (cost control, not security) and a warning is logged.
+- `GET /api/usage` reports `day`, `calls`, `limit`, `remaining` for the signed-in user.
+- Tests stay off the usage table by default (`GEMINI_DAILY_CALL_LIMIT=0` in conftest).
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,
@@ -96,7 +108,8 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
 - `tests/test_concurrency.py` (5 users in parallel, no collisions or leaks),
   `tests/test_sqlite_settings.py` (WAL, busy timeout, parallel writers).
 - `tests/test_edit_conflicts.py` (stale edits, simultaneous edits, ORM bumps, ownership).
-- Suite: 165 passed with `GEMINI_API_KEY` unset.
+- `tests/test_gemini_quota.py` (limit, per-user, daily reset, atomicity, fallbacks).
+- Suite: 175 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to

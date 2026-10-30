@@ -9,6 +9,12 @@ def _no_real_gemini_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_gemini_quota(monkeypatch):
+    """Quota accounting writes to the database; quota tests opt back in."""
+    monkeypatch.setenv("GEMINI_DAILY_CALL_LIMIT", "0")
+
+
+@pytest.fixture(autouse=True)
 def _offline_embeddings(monkeypatch):
     """Keep tests deterministic and offline; embedding tests opt back in."""
     monkeypatch.setenv("LIFE_INBOX_DISABLE_EMBEDDINGS", "1")

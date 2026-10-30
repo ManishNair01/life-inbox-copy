@@ -30,6 +30,45 @@ class GeminiBusy(Exception):
     """Too many Gemini calls are already in flight."""
 
 
+class GeminiQuotaExceeded(Exception):
+    """The current user used up today's Gemini call allowance."""
+
+
+# Per user per UTC day; 0 disables the quota. Counts calls we make (a call that
+# later fails still counts; internal retries of one call do not).
+DEFAULT_DAILY_CALL_LIMIT = 100
+
+
+def daily_call_limit() -> int:
+    raw = os.getenv("GEMINI_DAILY_CALL_LIMIT", "").strip()
+    if not raw:
+        return DEFAULT_DAILY_CALL_LIMIT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_DAILY_CALL_LIMIT
+
+
+def _charge_quota() -> None:
+    limit = daily_call_limit()
+    if limit <= 0:
+        return
+    # Imported here: app.database imports modules that import this one.
+    from app import database
+
+    try:
+        allowed = database.try_consume_ai_call(limit)
+    except Exception:
+        # Quota is cost control, not security: if the usage table is
+        # unavailable, keep the feature working rather than fail every call.
+        logger.warning("Gemini quota check failed; allowing the call", exc_info=True)
+        return
+    if not allowed:
+        raise GeminiQuotaExceeded(
+            f"Daily AI limit of {limit} calls reached; it resets at 00:00 UTC."
+        )
+
+
 def _max_concurrent() -> int:
     try:
         return max(1, int(os.getenv("GEMINI_MAX_CONCURRENT", "")))
@@ -95,6 +134,7 @@ def _text_of(data: dict) -> str:
 
 
 def generate_text(prompt: str) -> str:
+    _charge_quota()
     data = _post(
         generation_model(),
         {"contents": [{"parts": [{"text": prompt}]}]},
@@ -103,6 +143,7 @@ def generate_text(prompt: str) -> str:
 
 
 def transcribe_audio(data: bytes, mime_type: str) -> str:
+    _charge_quota()
     encoded = base64.b64encode(data).decode("ascii")
     response = _post(
         transcription_model(),

@@ -74,6 +74,7 @@ from app.organizer import analyze_inbox_with_gemini, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    AIUsage,
     AskRequest,
     AskResponse,
     CalendarConfirmRequest,
@@ -151,6 +152,15 @@ def health():
     except Exception as exc:
         logger.exception("Health config check failed")
         return {"status": "degraded", "error": str(exc)}
+
+
+@app.get("/api/usage", response_model=AIUsage)
+def ai_usage():
+    """Today's Gemini call count for the signed-in user."""
+    from app import gemini
+    from app.database import get_ai_usage
+
+    return get_ai_usage(gemini.daily_call_limit())
 
 
 @app.get("/api/auth/me")

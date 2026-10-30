@@ -167,6 +167,16 @@ class ItemVersionConflict(Exception):
         self.current = current
 
 
+class AIUsageRecord(Base):
+    """Gemini calls made per user per UTC day, for per-user quotas."""
+
+    __tablename__ = "ai_usage"
+
+    owner_user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    day = Column(Text, primary_key=True)
+    calls = Column(Integer, nullable=False, default=0)
+
+
 class AnalysisRunRecord(Base):
     __tablename__ = "analysis_runs"
     __table_args__ = (
@@ -736,6 +746,69 @@ def update_note_in_db(note_id: int, text: str) -> Optional[dict]:
 
 def delete_note_from_db(note_id: int) -> bool:
     return delete_item_from_db(note_id)
+
+
+def _utc_day() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def try_consume_ai_call(limit: int) -> bool:
+    """Count one AI call for the current user today, unless at ``limit``.
+
+    The check and the increment are one conditional UPDATE, so concurrent
+    requests (threads or worker processes) can never exceed the limit.
+    """
+    owner_id = require_owner_id()
+    day = _utc_day()
+    with SessionLocal() as session:
+        for _ in range(2):
+            consumed = session.execute(
+                update(AIUsageRecord)
+                .where(
+                    AIUsageRecord.owner_user_id == owner_id,
+                    AIUsageRecord.day == day,
+                    AIUsageRecord.calls < limit,
+                )
+                .values(calls=AIUsageRecord.calls + 1)
+            )
+            if consumed.rowcount:
+                session.commit()
+                return True
+            exists = session.execute(
+                select(AIUsageRecord.calls).where(
+                    AIUsageRecord.owner_user_id == owner_id,
+                    AIUsageRecord.day == day,
+                )
+            ).first()
+            if exists is not None:
+                session.rollback()
+                return False
+            try:
+                session.add(AIUsageRecord(owner_user_id=owner_id, day=day, calls=1))
+                session.commit()
+                return True
+            except IntegrityError:
+                # Another request created today's row first; retry the UPDATE.
+                session.rollback()
+        return False
+
+
+def get_ai_usage(limit: int) -> dict:
+    owner_id = require_owner_id()
+    day = _utc_day()
+    with SessionLocal() as session:
+        calls = session.execute(
+            select(AIUsageRecord.calls).where(
+                AIUsageRecord.owner_user_id == owner_id,
+                AIUsageRecord.day == day,
+            )
+        ).scalar() or 0
+    return {
+        "day": day,
+        "calls": calls,
+        "limit": limit if limit > 0 else None,
+        "remaining": max(0, limit - calls) if limit > 0 else None,
+    }
 
 
 def start_analysis_run() -> int:

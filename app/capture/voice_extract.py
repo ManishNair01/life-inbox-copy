@@ -158,6 +158,18 @@ def transcribe_audio(
             "available": True,
             "note": None if text else "Transcription returned no spoken text.",
         }
+    except gemini.GeminiQuotaExceeded:
+        logger.warning("Daily Gemini limit reached; skipping transcription")
+        return {
+            "text": "",
+            "provider": "unavailable",
+            "available": False,
+            "note": (
+                "Today's AI usage limit has been reached, so this recording was "
+                "not transcribed. You can edit the transcript manually, or retry "
+                "processing tomorrow."
+            ),
+        }
     except Exception:
         logger.exception(
             "Voice transcription failed for %s; preserving audio with empty transcript",

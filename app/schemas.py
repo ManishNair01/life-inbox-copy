@@ -78,6 +78,13 @@ class UrlItemCreate(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
 
 
+class AIUsage(BaseModel):
+    day: str
+    calls: int
+    limit: Optional[int] = None
+    remaining: Optional[int] = None
+
+
 class ExtractedTextUpdate(BaseModel):
     extracted_text: str = Field(min_length=0, max_length=20000)
     expected_version: Optional[int] = Field(default=None, ge=1)
