@@ -2011,3 +2011,50 @@ def test_health_includes_config_metadata(client):
     assert payload["status"] == "ok"
     assert "environment" in payload
     assert "database" in payload
+
+
+def test_second_analysis_while_one_is_running_returns_409(client):
+    from app import database
+
+    client.post("/api/notes", json={"text": "Call the dentist tomorrow"})
+    run_id = database.start_analysis_run()
+
+    response = client.post("/api/analyze")
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+
+    database.fail_analysis_run(run_id)
+    assert client.post("/api/analyze").status_code == 200
+
+
+def test_stale_running_analysis_does_not_block_new_runs(client):
+    from datetime import datetime, timedelta, timezone
+
+    from app import database
+
+    database.start_analysis_run()
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    with database.SessionLocal() as session:
+        run = session.query(database.AnalysisRunRecord).one()
+        run.started_at = old
+        session.commit()
+
+    assert database.start_analysis_run() > 0
+    with database.SessionLocal() as session:
+        statuses = sorted(r.status for r in session.query(database.AnalysisRunRecord))
+    assert statuses == ["failed", "running"]
+
+
+def test_failed_analysis_releases_the_running_slot(client, monkeypatch):
+    from app import main
+
+    client.post("/api/notes", json={"text": "Buy milk"})
+
+    def boom(notes):
+        raise RuntimeError("boom")
+
+    original = main.analyze_inbox_with_gemini
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", boom)
+    assert client.post("/api/analyze").status_code == 500
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", original)
+    assert client.post("/api/analyze").status_code == 200

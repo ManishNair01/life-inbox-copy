@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -23,7 +24,9 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    text,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -76,6 +79,13 @@ READY_STATUS = STATUS_READY
 ANALYSIS_RUNNING = "running"
 ANALYSIS_SUCCEEDED = "succeeded"
 ANALYSIS_FAILED = "failed"
+# A run left "running" longer than this belongs to a crashed process. It is
+# well above the Gemini client's worst case (3 attempts x 60 s plus backoff).
+ANALYSIS_STALE_AFTER = timedelta(minutes=10)
+
+
+class AnalysisAlreadyRunning(Exception):
+    """The current user already has an analysis in progress."""
 TASK_OPEN = "open"
 TASK_COMPLETED = "completed"
 TASK_DISMISSED = "dismissed"
@@ -120,7 +130,18 @@ class InboxItemRecord(Base):
 
 class AnalysisRunRecord(Base):
     __tablename__ = "analysis_runs"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (
+        # At most one running analysis per user, enforced by the database so it
+        # holds across threads and worker processes.
+        Index(
+            "uq_analysis_runs_one_running_per_owner",
+            "owner_user_id",
+            unique=True,
+            sqlite_where=text("status = 'running'"),
+            postgresql_where=text("status = 'running'"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     started_at = Column(Text, nullable=False)
@@ -640,17 +661,34 @@ def delete_note_from_db(note_id: int) -> bool:
 
 
 def start_analysis_run() -> int:
-    started_at = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     owner_id = require_owner_id()
     with SessionLocal() as session:
+        stale_before = (now - ANALYSIS_STALE_AFTER).isoformat()
+        for stale in session.scalars(
+            select(AnalysisRunRecord).where(
+                AnalysisRunRecord.owner_user_id == owner_id,
+                AnalysisRunRecord.status == ANALYSIS_RUNNING,
+                AnalysisRunRecord.started_at < stale_before,
+            )
+        ):
+            stale.status = ANALYSIS_FAILED
+            stale.mode = "error"
+            stale.completed_at = now.isoformat()
+        session.flush()
+
         run = AnalysisRunRecord(
-            started_at=started_at,
+            started_at=now.isoformat(),
             status=ANALYSIS_RUNNING,
             mode="pending",
             owner_user_id=owner_id,
         )
         session.add(run)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise AnalysisAlreadyRunning() from exc
         return run.id
 
 

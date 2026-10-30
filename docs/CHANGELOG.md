@@ -56,6 +56,13 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   corpus, which previously deflated every score.
 - `app/retrieval/ask.py`: "insufficient evidence" threshold lowered from 0.20 to 0.19.
 
+### Added: one analysis per user at a time
+- Migration `0013_one_running_analysis`: partial unique index so a user can have only
+  one `running` analysis, enforced by the DB across threads and workers. Existing
+  `running` rows are marked failed when migrating.
+- `POST /api/analyze` returns 409 if one is already running; runs left `running`
+  for over 10 minutes are treated as crashed and expired.
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,

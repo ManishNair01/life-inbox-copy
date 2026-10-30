@@ -55,6 +55,7 @@ from app.database import (
     set_task_reminder_in_db,
     set_task_status,
     snooze_task_in_db,
+    AnalysisAlreadyRunning,
     start_analysis_run,
     update_item_extracted_text,
     update_item_in_db,
@@ -1199,6 +1200,11 @@ def analyze_inbox():
         raw_result = analyze_inbox_with_gemini(notes)
         result = validate_analysis_result(raw_result, notes)
         return complete_analysis_run(run_id, result)
+    except AnalysisAlreadyRunning as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running. Please wait for it to finish.",
+        ) from exc
     except Exception as exc:
         if run_id is not None:
             try:
