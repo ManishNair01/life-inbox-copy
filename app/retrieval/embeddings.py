@@ -44,6 +44,21 @@ def model_name() -> str:
     return os.getenv("LIFE_INBOX_EMBEDDING_MODEL", "").strip() or DEFAULT_MODEL
 
 
+def status() -> str:
+    """Current state without loading anything (safe for health checks).
+
+    disabled: turned off by env. ready: model loaded. unavailable: loading
+    failed, so callers use the fallbacks. not_loaded: not needed yet.
+    """
+    if _disabled():
+        return "disabled"
+    if _model is not None:
+        return "ready"
+    if _load_failed:
+        return "unavailable"
+    return "not_loaded"
+
+
 def _load_model():
     """Load (once) the embedding model, or return None if unavailable."""
     global _model, _model_name, _load_failed

@@ -128,6 +128,28 @@ is stored in the database.
   A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
   10 minutes is treated as crashed and expired.
 
+## Health check
+
+`GET /healthz` is unauthenticated and reports readiness only (no keys, versions,
+paths, error text or user data):
+
+```json
+{"status": "ok", "database": "ok", "schema": "current",
+ "embeddings": "ready", "gemini": {"configured": true, "daily_limit_per_user": 100}}
+```
+
+- **HTTP 503** (`status: "unavailable"`) when the database is unreachable or the
+  schema is `behind` this build's newest migration (run `alembic upgrade head`).
+  Point load balancers at it.
+- **HTTP 200 with `status: "degraded"`** when the embedding model failed to load:
+  the app still works with keyword search, so it should keep serving.
+- `schema` is `unknown` when the database has no `alembic_version` table or the
+  migration scripts cannot be read; that does not fail the check.
+- `embeddings` is `disabled`, `not_loaded` (not needed yet, loads on first use),
+  `ready` or `unavailable`. The check never downloads the model or calls Gemini.
+- The Dockerfile `HEALTHCHECK` calls it (60 s start period for migrations). The
+  older `/api/health` still reports environment and config warnings.
+
 ## Migrations / backups / rollback
 
 - Alembic is the only schema owner: `alembic upgrade head`

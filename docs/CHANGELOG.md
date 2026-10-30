@@ -102,6 +102,18 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   the limit when AI is enabled (checked in a browser).
 - Tests stay off the usage table by default (`GEMINI_DAILY_CALL_LIMIT=0` in conftest).
 
+### Added: /healthz readiness endpoint
+- `GET /healthz` (new `app/health.py`): database reachability, schema vs the build's
+  migration head (`current`, `behind`, `unknown`), embedding state (`disabled`,
+  `not_loaded`, `ready`, `unavailable`) and whether Gemini is configured. Returns 503
+  when the database is down or the schema is behind, 200 `degraded` when only the
+  embedding model failed.
+- Unauthenticated but exposes no secrets, versions or error text, and has no side
+  effects (never loads the model or calls Gemini). The owner-binding middleware skips
+  it so a database outage gives 503, not 500.
+- `embeddings.status()` reports model state without loading it.
+- Dockerfile `HEALTHCHECK` uses it (not built here: Docker is not installed).
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,
@@ -114,7 +126,9 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   `tests/test_sqlite_settings.py` (WAL, busy timeout, parallel writers).
 - `tests/test_edit_conflicts.py` (stale edits, simultaneous edits, ORM bumps, ownership).
 - `tests/test_gemini_quota.py` (limit, per-user, daily reset, atomicity, fallbacks).
-- Suite: 176 passed with `GEMINI_API_KEY` unset.
+- `tests/test_healthz.py` (ready, 503 on DB down or stale schema, degraded, no secrets,
+  no side effects).
+- Suite: 185 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to

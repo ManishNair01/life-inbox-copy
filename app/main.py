@@ -122,6 +122,11 @@ async def bind_owner_from_session(request, call_next):
         set_current_owner_id,
     )
 
+    if request.url.path == "/healthz":
+        # Must work (and report 503) even when the database is down, so skip
+        # the owner lookup, which touches the database.
+        return await call_next(request)
+
     token = request.cookies.get(SESSION_COOKIE)
     owner_id = parse_session_token(token) if token else None
     if owner_id is None:
@@ -134,6 +139,17 @@ async def bind_owner_from_session(request, call_next):
     finally:
         set_current_owner_id(None)
     return response
+
+
+@app.get("/healthz")
+def healthz(response: Response):
+    """Readiness for load balancers and container health checks."""
+    from app.health import readiness
+
+    report, ready = readiness()
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return report
 
 
 @app.get("/api/health")

@@ -26,6 +26,7 @@ Open http://127.0.0.1:8000
 - [ ] After editing inbox post-analysis, stale banner / status appears
 - [ ] Invalid empty note rejected with friendly status
 - [ ] `/api/health` returns `{"status":"ok"}`
+- [ ] `/healthz` returns 200 with `status` ok (503 if the DB is down or the schema is behind)
 
 ## Organization smoke (Milestone 2+)
 

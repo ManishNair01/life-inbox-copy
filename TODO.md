@@ -46,8 +46,9 @@ explicit user confirmation, and AI-inferred content stays labelled.
       M calls", "(K left)" near the limit), a warning banner when the limit is reached,
       and fresh Analyze/Ask results say when they used basic methods because of it.
       Hidden when no key or no limit is configured.
-- [ ] **`/healthz`:** report DB reachability, whether the embedding model loaded,
-      and whether a Gemini key is configured.
+- [x] **`/healthz`.** Unauthenticated readiness: database reachable, schema vs the
+      build's migration head, embedding state, whether Gemini is configured. 503 when
+      the DB is down or the schema is behind; Dockerfile `HEALTHCHECK` uses it.
 
 ## Multi-user concurrency
 Status: 6 of 6 done.
