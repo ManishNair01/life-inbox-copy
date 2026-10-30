@@ -26,7 +26,7 @@ LIFE_INBOX_MAX_UPLOAD_MB=5
 LIFE_INBOX_CALENDAR_PROVIDER=mock|google
 ```
 
-Optional: `OPENAI_API_KEY` for live organization only (never in automated tests).
+Optional: `GEMINI_API_KEY` for live organization only (never in automated tests).
 
 ## Local run
 
@@ -34,7 +34,7 @@ Optional: `OPENAI_API_KEY` for live organization only (never in automated tests)
 export DATABASE_URL="sqlite:////tmp/life_inbox_beta.db"
 export LIFE_INBOX_UPLOAD_DIR="/tmp/life_inbox_uploads"
 export LIFE_INBOX_SESSION_SECRET="local-dev-secret-at-least-32-chars!!"
-unset OPENAI_API_KEY
+unset GEMINI_API_KEY
 python3 -m pip install -r requirements.txt
 python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -62,6 +62,46 @@ evaluation only. Before any shared beta:
 Install Postgres driver when using compose: `pip install 'psycopg[binary]'`
 (or add to a private requirements overlay). The base `requirements.txt`
 stays SQLite-friendly for local teaching.
+
+## AI and embedding model (first run)
+
+Two optional features need outside resources. The app works without either:
+it falls back to keyword search, lexical related-item links and extractive
+answers.
+
+**Gemini (`GEMINI_API_KEY`)** powers analysis, Ask My Inbox synthesis and voice
+transcription. Without a key, or when the API errors, each feature uses its
+deterministic fallback. Set the key through the environment or a secrets store,
+never in the image or the repo.
+
+**Local embedding model** powers semantic search and "related" links
+(`docs/semantic-linking.md`). `fastembed` downloads the model
+(`BAAI/bge-small-en-v1.5`, a small ONNX file) from the Hugging Face hub the
+first time it is needed, so:
+
+- The first search or analysis after a fresh install needs outbound network
+  access and some disk space, and is slower while the model downloads and loads.
+- If the download fails, the app logs a warning and uses the fallbacks for the
+  life of that process. It does not retry on every request, so fix the network
+  and restart.
+- The `Dockerfile` downloads the model at build time into `/opt/fastembed`
+  (`FASTEMBED_CACHE_PATH`), so containers need no network for it at runtime.
+  Building the image therefore needs access to the Hugging Face hub.
+- By default the model is cached in the OS temp dir (`fastembed_cache`). In a
+  container that is lost on restart, so the model downloads again. Point
+  `FASTEMBED_CACHE_PATH` at a mounted volume to keep it.
+- For air-gapped hosts, or to avoid a slow first request, warm the cache once
+  with network access and ship that directory:
+
+  ```bash
+  FASTEMBED_CACHE_PATH=/data/fastembed python3 -c     "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+  ```
+
+- `LIFE_INBOX_DISABLE_EMBEDDINGS=1` turns the model off entirely. Changing
+  `LIFE_INBOX_EMBEDDING_MODEL` means re-evaluating the 0.40 related-link cutoff.
+
+Embeddings are computed on demand and cached in memory only; nothing about them
+is stored in the database.
 
 ## Migrations / backups / rollback
 

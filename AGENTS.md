@@ -5,7 +5,7 @@ Guidance for humans and coding agents working in this repository.
 ## Startup
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -r requirements-dev.txt
 export DATABASE_URL="sqlite:////absolute/path/to/temp_life_inbox.db"
 export LIFE_INBOX_UPLOAD_DIR="/tmp/life_inbox_uploads"
 python3 -m alembic upgrade head
@@ -17,20 +17,21 @@ Open http://127.0.0.1:8000
 Optional AI:
 
 ```bash
-export OPENAI_API_KEY="..."
-export OPENAI_MODEL="gpt-5-mini"
+export GEMINI_API_KEY="..."
+export GEMINI_MODEL="gemini-3.5-flash"
 ```
 
 ## Tests
 
 ```bash
-unset OPENAI_API_KEY
+unset GEMINI_API_KEY
 python3 -m pytest -v --tb=short
 ```
 
 Tests use isolated temporary SQLite databases via `DATABASE_URL` and set
 `LIFE_INBOX_AUTO_CREATE_TABLES=1`. They must not call live paid APIs; mock
-OpenAI and other external services.
+Gemini and other external services. `tests/conftest.py` clears the Gemini
+key and disables the embedding model for every test.
 
 ## Migrations
 
@@ -51,7 +52,12 @@ Do not rely on SQLAlchemy `create_all` outside automated tests.
 - Pydantic contracts in `app/schemas.py`
 - Organization / AI in `app/organizer.py`
 - Rich capture in `app/capture/` (`POST /api/items/url`, `/pdf`, `/image`, `/voice`)
-- Retrieval / Ask in `app/retrieval/` (`GET /api/search`, `POST /api/ask`)
+- Retrieval / Ask in `app/retrieval/` (`GET /api/search`, `POST /api/ask`); local
+  embeddings in `app/retrieval/embeddings.py`
+- Gemini client in `app/gemini.py` (analysis, Ask, voice transcription)
+- Related-item links in `app/similarity.py` (`GET /api/relations`); evaluation
+  sets in `tests/fixtures/linking_eval_*.csv`, runner `scripts/eval_linking.py`,
+  write-up in `docs/semantic-linking.md`
 - Attention / reminders in `app/attention/` (`GET /api/attention`, `/api/briefing`)
 - Calendar adapter in `app/integrations/calendar.py` (preview + mock confirm only)
 - Auth / ownership in `app/auth.py` + `users.owner_user_id` scoping

@@ -6,14 +6,14 @@ It preserves the features already present in the notebook:
 - save a text note;
 - list, edit, and delete saved notes;
 - organize the entire inbox into buckets, priorities, and ToDos;
-- use the OpenAI API when an API key is available;
+- use the Gemini API when an API key is available;
 - use the notebook's deterministic fallback organizer otherwise.
 
 ## 1. Requirements
 
 - Python 3.10 or newer
 - A terminal
-- An OpenAI API key is optional. The fallback organizer works without one.
+- A Gemini API key is optional. The fallback organizer works without one.
 
 ## 2. Set up the project
 
@@ -33,7 +33,7 @@ On Windows, activate it with:
 Install the dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 ```
 
 ## 3. Configure and migrate the database
@@ -106,7 +106,7 @@ results are stored in `analysis_runs`, and each text item's latest category,
 concise title, and priority are stored in `item_insights`.
 
 `GET /api/analyze/latest` returns the latest successful result without calling
-OpenAI. The browser uses it on page load and displays when the result was
+Gemini. The browser uses it on page load and displays when the result was
 generated. Each successful result stores an inbox content fingerprint; the API
 sets `is_stale` when items have changed since that run. Failed runs are
 recorded separately and never replace the previous successful result or its
@@ -135,24 +135,29 @@ task's latest text, priority, and timing in place instead of creating a
 duplicate when AI wording or priority changes. Its open, completed, or
 dismissed status is never changed by AI analysis.
 
-## 4. Optional: configure OpenAI
+## 4. Optional: configure Gemini
 
 If you want AI analysis instead of the local fallback, set your API key in the
 terminal before starting the application:
 
 ```bash
-export OPENAI_API_KEY="your-api-key"
-export OPENAI_MODEL="gpt-5-mini"
+export GEMINI_API_KEY="your-api-key"
+export GEMINI_MODEL="gemini-3.5-flash"
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:OPENAI_API_KEY="your-api-key"
-$env:OPENAI_MODEL="gpt-5-mini"
+$env:GEMINI_API_KEY="your-api-key"
+$env:GEMINI_MODEL="gemini-3.5-flash"
 ```
 
-Do not put the real key in source code or commit it to Git.
+The app loads a `.env` file from the project folder automatically (real
+environment variables take precedence). Do not put the real key in source
+code or commit it to Git.
+
+Gemini powers inbox analysis, Ask My Inbox, and voice-note transcription
+(`GEMINI_TRANSCRIPTION_MODEL` optionally overrides the model for audio).
 
 ## 5. Start Life Inbox
 
@@ -176,7 +181,7 @@ From the top-level `life-inbox` folder, run:
 python -m pytest
 ```
 
-The tests use temporary SQLite databases and do not call OpenAI.
+The tests use temporary SQLite databases and do not call Gemini.
 
 ## 7. Optional: add demonstration notes
 
@@ -187,7 +192,7 @@ While the server is stopped, run:
 python -m scripts.seed_demo_notes
 ```
 
-It uses OpenAI when an API key is available and otherwise uses the notebook's
+It uses Gemini when an API key is available and otherwise uses the notebook's
 local fallback list.
 
 ## Project layout
@@ -229,8 +234,38 @@ life-inbox/
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
+├── requirements-dev.txt
 └── README.md
 ```
 
 The original notebook remains in `reference/` so you can compare the local
 project with the classroom version.
+
+## Search and Ask retrieval
+
+Search and Ask My Inbox rank notes with a local open-source embedding model
+(`BAAI/bge-small-en-v1.5` via `fastembed`, about 130 MB, downloaded on first
+use) blended with a keyword score. It runs on your machine: no API key, no
+quota, and notes are not sent anywhere for retrieval. If the model cannot be
+loaded the app falls back to TF-IDF scoring automatically.
+
+- `LIFE_INBOX_EMBEDDING_MODEL` selects a different fastembed model.
+- `LIFE_INBOX_DISABLE_EMBEDDINGS=1` forces the TF-IDF fallback (tests do this).
+
+## Related items (semantic linking)
+
+Analyze links notes that are about the same thing, including paraphrases that
+share no words ("order flowers for Mom" and "get a bouquet for Mum"). Duplicates
+are found by text overlap; "related" links use the same local embedding model as
+search, and each link is labelled either "AI-inferred" or "text match". Links can
+be dismissed and stay dismissed.
+
+On two hand-labelled evaluation sets, the original text-overlap scorer found 2 of
+24 and 2 of 17 true links (F1 0.12 and 0.18); the embedding-based scorer finds 12
+of 24 and 11 of 17 (F1 0.63 and 0.69). The full journey, every approach that was
+tried and rejected, and how to reproduce the numbers are in
+[docs/semantic-linking.md](docs/semantic-linking.md). To rerun the comparison:
+
+```bash
+python -m scripts.eval_linking --summary
+```
