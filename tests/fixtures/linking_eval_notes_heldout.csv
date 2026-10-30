@@ -1,0 +1,48 @@
+note_id,text,group_id,scenario,hard_negative_group
+1,"call bank about the failed transfer",H01,near_duplicate,
+2,"ring the bank re: transfer that bounced",H01,near_duplicate,
+3,"transfer still pending, email bank support with the ref number",H01,followup,
+4,"mara's wedding is on 3 may, need an outfit",H02,same_entity,
+5,"book the suit alteration for mara's wedding",H02,same_entity,
+6,"need to clean out the garage this weekend",H03,paraphrase,
+7,"declutter the car port, donate the old boxes",H03,paraphrase,
+8,"ask tomas about the kubernetes migration",H04,same_entity,
+9,"k8s cluster move plan draft due thursday",H04,paraphrase,
+10,"tomas to review the migration runbook",H04,same_entity,
+11,"Iris school play friday 6pm",H05,same_entity,
+12,"buy tickets for iris's school play",H05,same_entity,
+13,"dentist says i need a filling, book follow up",H06,followup,
+14,"tooth hurts with cold drinks, call the dental clinic",H06,paraphrase,
+15,"pay the electricity bill before the 5th",H07,near_duplicate,
+16,"power company invoice due this week, set up autopay",H07,paraphrase,
+17,"watch lecture 4 on linear algebra eigenvalues",H08,followup,
+18,"do the problem set on eigenvectors and matrix diagonalization",H08,followup,
+19,"bedroom wall paint: sage green, 2 litres",H09,followup,
+20,"pick up sage samples and rollers from the hardware store",H09,followup,
+21,"train to edinburgh on 14 feb 8:10 from kings cross",H10,same_entity,
+22,"book an airbnb in edinburgh old town for valentines weekend",H10,same_entity,
+23,"biscuit needs annual vaccines, vet on wednesday",H11,paraphrase,
+24,"dog's shots are due, call the vet",H11,paraphrase,
+25,"send quarterly numbers to the finance team",H12,paraphrase,
+26,"q3 revenue report is still missing the ops figures",H12,paraphrase,
+27,"secret santa: i got jun, budget 20",H13,same_entity,
+28,"find a small present for jun's office gift swap",H13,same_entity,
+29,"the river bank is eroding near the trail, avoid it",N01,hard_negative,H01
+30,"mara's tapas place on 5th street has great reviews",N02,hard_negative,H02
+31,"watch the documentary about bird migration across the sea",N03,hard_negative,H04
+32,"paint the town red, friday drinks with the team",N04,hard_negative,H09
+33,"reply to edinburgh university about the alumni survey",N05,hard_negative,H10
+34,"transfer window news: ask sam about his football team",N06,hard_negative,H01
+35,"Bill from accounting is leaving, buy a card",N07,hard_negative,H07
+36,"remember to stretch every morning",S01,singleton,
+37,"movie night pick: the grand budapest hotel",S02,singleton,
+38,"gift wrap supplies running low",S03,singleton,
+39,"fix the squeaky door hinge",S04,singleton,
+40,"try the new ramen place near the office",S05,singleton,
+41,"back up laptop photos to the external drive",S06,singleton,
+42,"idea for a newsletter about slow mornings",S07,singleton,
+43,"renew library card",S08,singleton,
+44,"buy sunscreen before the beach trip",S09,singleton,
+45,"ask the neighbour about the missing parcel",S10,singleton,
+46,"unsubscribe from promotional emails",S11,singleton,
+47,"learn to bake sourdough",S12,singleton,

@@ -1230,7 +1230,7 @@ async function loadDashboard() {
           `<li>#${item.id} · ${esc(item.reason || 'Review needed')}</li>`
         ))}
         ${section('Related Items', listOrEmpty(data.related_items, rel =>
-          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span></li>`
+          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span> <span class="muted">${rel.method === 'semantic' ? 'AI-inferred' : 'text match'} · ${Number(rel.score).toFixed(2)}</span></li>`
         ))}
       </div>
     `;

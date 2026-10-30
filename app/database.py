@@ -201,6 +201,8 @@ class ItemRelationRecord(Base):
     score = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
     dismissed = Column(Integer, nullable=False, default=0)
+    # "lexical" (text overlap) or "semantic" (local embeddings, AI-inferred).
+    method = Column(Text, nullable=False, default="lexical", server_default="lexical")
 
 
 class TaskRecord(Base):
@@ -846,6 +848,7 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                 if existing.dismissed:
                     continue
                 existing.score = relation["score"]
+                existing.method = relation["method"]
                 continue
             session.add(
                 ItemRelationRecord(
@@ -853,6 +856,7 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     item_id_b=relation["item_id_b"],
                     relation_type=relation["relation_type"],
                     score=relation["score"],
+                    method=relation["method"],
                     created_at=completed_at,
                     dismissed=0,
                 )
@@ -1635,6 +1639,7 @@ def list_relations_from_db(
                 "item_id_b": row.item_id_b,
                 "relation_type": row.relation_type,
                 "score": float(row.score),
+                "method": row.method,
                 "dismissed": bool(row.dismissed),
                 "created_at": row.created_at,
             }
@@ -1655,6 +1660,7 @@ def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
             "item_id_b": row.item_id_b,
             "relation_type": row.relation_type,
             "score": float(row.score),
+            "method": row.method,
             "dismissed": True,
             "created_at": row.created_at,
         }

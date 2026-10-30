@@ -1,0 +1,53 @@
+note_id,text,group_id,scenario,hard_negative_group
+1,"Call CA tomorrow about the advance tax calculation.",G01,near_duplicate,
+2,"Need to phone the accountant tomorrow re: advance tax figures.",G01,near_duplicate,
+3,"Advance tax deadline is 15 March, check numbers with CA before paying.",G01,same_entity,
+4,"Landlord says the kitchen tap leak will be fixed this week.",G02,followup,
+5,"Plumber coming Thursday 10am to repair the leaking kitchen faucet.",G02,followup,
+6,"Kitchen faucet still dripping after plumber visit, message landlord again.",G02,followup,
+7,"Mom's birthday is on 12 June, order flowers.",G03,paraphrase,
+8,"Get a bouquet for Mum before her big day next month.",G03,paraphrase,
+9,"Book a restaurant table for the family dinner celebrating Mom turning 60.",G03,same_entity,
+10,"Project Atlas kickoff meeting moved to Monday 9:30.",G04,same_entity,
+11,"Send Priya the Atlas budget draft before kickoff.",G04,same_entity,
+12,"Atlas vendor shortlist: Northwind, Contoso, Fabrikam.",G04,same_entity,
+13,"Physio appointment for right knee on Tuesday 5pm.",G05,followup,
+14,"Knee has been aching after runs, ask physio about stretches.",G05,followup,
+15,"Flight to Lisbon departs 7 Nov 06:45 from Terminal 2.",G06,same_entity,
+16,"Pack passport, charger and adapter for the Portugal trip.",G06,paraphrase,
+17,"Reserve a hotel in Alfama for the Lisbon trip, 4 nights.",G06,same_entity,
+18,"Finish chapter 6 of the Rust book on ownership.",G07,same_entity,
+19,"Practice borrowing and lifetimes exercises to get comfortable with the memory model.",G07,paraphrase,
+20,"Cancel the gym membership before the 1st, it auto-renews at 49 a month.",G08,near_duplicate,
+21,"Fitness club subscription renews next week, stop the recurring charge.",G08,near_duplicate,
+22,"Car service due at 45,000 km, book with the Honda dealer.",G09,followup,
+23,"Engine light came on yesterday, mention it at the car service.",G09,followup,
+24,"Try the lentil soup recipe from Sam: red lentils, cumin, lemon.",G10,followup,
+25,"Shopping list for Sam's soup: red lentils, lemons, cumin, onions.",G10,followup,
+26,"Prepare talking points for the performance review with Dana on Friday.",G11,paraphrase,
+27,"Collect examples of shipped work for my annual appraisal next week.",G11,paraphrase,
+28,"Gift idea for Raj: noise-cancelling headphones, his old ones broke.",G12,same_entity,
+29,"Raj's birthday is in October, still need a present.",G12,same_entity,
+30,"Passport expires in March, start renewal at least 3 months early.",G13,followup,
+31,"Renew travel document: need two photos and the old booklet.",G13,paraphrase,
+32,"Sleeping badly lately, try no screens after 10pm.",G14,paraphrase,
+33,"Insomnia again; set a digital curfew at night and read instead.",G14,paraphrase,
+34,"Doctor appointment for dad's blood pressure check on 3 Dec.",N01,hard_negative,G05
+35,"Borrow the Atlas of the Himalayas from the library for trek planning.",N02,hard_negative,G04
+36,"Scrape the rust off the garden gate and repaint it.",N03,hard_negative,G07
+37,"Gym bag needs a new zipper.",N04,hard_negative,G08
+38,"Kid's toy car is missing a wheel, glue it back.",N05,hard_negative,G09
+39,"The flight of stairs creaks, fix the loose step.",N06,hard_negative,G06
+40,"Soup kitchen volunteering signup closes Saturday.",N07,hard_negative,G10
+41,"Apple stock dropped 4% after earnings, review holdings.",N08,hard_negative,N09
+42,"Buy apples, bananas and oats for breakfast.",N09,hard_negative,N08
+43,"Idea: weekly Sunday planning ritual with a 20-minute inbox review.",S01,singleton,
+44,"Return the library book Deep Work by the 20th.",S02,singleton,
+45,"Water the balcony plants every other day in summer.",S03,singleton,
+46,"Wifi password for the guest network is on the fridge door.",S04,singleton,
+47,"Look into a standing desk, budget under 300.",S05,singleton,
+48,"Podcast recommendation from Meera about urban cycling.",S06,singleton,
+49,"Replace batteries in the smoke detector.",S07,singleton,
+50,"Draft a thank-you note to the interview panel.",S08,singleton,
+51,"Someday: build a small cabin by a lake.",S09,singleton,
+52,"Renew the domain name before it lapses in January.",S10,singleton,
