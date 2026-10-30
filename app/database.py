@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -23,8 +24,12 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    text,
+    update,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.engine import Engine
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.capture.pipeline import (
@@ -62,12 +67,24 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 
+# How long a writer waits for SQLite's single write lock before giving up.
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
 @event.listens_for(Engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
-    """SQLite only enforces CASCADE when foreign_keys pragma is on."""
+def _configure_sqlite(dbapi_connection, connection_record):
+    """Per-connection SQLite settings.
+
+    foreign_keys: SQLite only enforces CASCADE when the pragma is on.
+    busy_timeout: wait for the write lock instead of failing "database is locked".
+    journal_mode=WAL: readers no longer block the writer (and vice versa). It is
+    stored in the database file and is a no-op for in-memory databases.
+    """
     if dbapi_connection.__class__.__module__.startswith("sqlite3"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 
 
@@ -76,6 +93,13 @@ READY_STATUS = STATUS_READY
 ANALYSIS_RUNNING = "running"
 ANALYSIS_SUCCEEDED = "succeeded"
 ANALYSIS_FAILED = "failed"
+# A run left "running" longer than this belongs to a crashed process. It is
+# well above the Gemini client's worst case (3 attempts x 60 s plus backoff).
+ANALYSIS_STALE_AFTER = timedelta(minutes=10)
+
+
+class AnalysisAlreadyRunning(Exception):
+    """The current user already has an analysis in progress."""
 TASK_OPEN = "open"
 TASK_COMPLETED = "completed"
 TASK_DISMISSED = "dismissed"
@@ -116,11 +140,57 @@ class InboxItemRecord(Base):
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
+    # Bumped on every change to the item's text so clients can detect that
+    # they are editing a stale copy (optimistic concurrency).
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+
+
+_VERSIONED_FIELDS = ("raw_text", "extracted_text", "ai_description")
+
+
+@event.listens_for(InboxItemRecord, "before_update")
+def _bump_item_version(mapper, connection, target):
+    """Any ORM write that changes item text (capture retries, extraction) bumps
+    the version, so a client holding an older version gets a conflict."""
+    state = sa_inspect(target)
+    if state.attrs.version.history.has_changes():
+        return
+    if any(state.attrs[name].history.has_changes() for name in _VERSIONED_FIELDS):
+        target.version = (target.version or 1) + 1
+
+
+class ItemVersionConflict(Exception):
+    """The item changed since the client last read it."""
+
+    def __init__(self, current: dict):
+        super().__init__("Item was modified by another request")
+        self.current = current
+
+
+class AIUsageRecord(Base):
+    """Gemini calls made per user per UTC day, for per-user quotas."""
+
+    __tablename__ = "ai_usage"
+
+    owner_user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    day = Column(Text, primary_key=True)
+    calls = Column(Integer, nullable=False, default=0)
 
 
 class AnalysisRunRecord(Base):
     __tablename__ = "analysis_runs"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (
+        # At most one running analysis per user, enforced by the database so it
+        # holds across threads and worker processes.
+        Index(
+            "uq_analysis_runs_one_running_per_owner",
+            "owner_user_id",
+            unique=True,
+            sqlite_where=text("status = 'running'"),
+            postgresql_where=text("status = 'running'"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     started_at = Column(Text, nullable=False)
@@ -201,6 +271,8 @@ class ItemRelationRecord(Base):
     score = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
     dismissed = Column(Integer, nullable=False, default=0)
+    # "lexical" (text overlap) or "semantic" (local embeddings, AI-inferred).
+    method = Column(Text, nullable=False, default="lexical", server_default="lexical")
 
 
 class TaskRecord(Base):
@@ -409,6 +481,7 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "version": item.version or 1,
     }
 
 
@@ -526,7 +599,46 @@ def compute_inbox_fingerprint(session=None) -> str:
         return _fingerprint(owned_session)
 
 
-def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
+def _apply_item_edit(
+    session,
+    item: InboxItemRecord,
+    values: dict,
+    expected_version: Optional[int],
+) -> dict:
+    """Write a user edit as one conditional UPDATE (compare-and-set).
+
+    With ``expected_version`` the write only happens if the row still has that
+    version, which is atomic even across threads and worker processes. Without
+    it (older clients) the edit is last-write-wins, as before. Either way the
+    version is incremented.
+    """
+    conditions = [InboxItemRecord.id == item.id]
+    if expected_version is not None:
+        conditions.append(InboxItemRecord.version == expected_version)
+    result = session.execute(
+        update(InboxItemRecord)
+        .where(*conditions)
+        .values(
+            **values,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            version=InboxItemRecord.version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount == 0:
+        session.rollback()
+        session.refresh(item)
+        raise ItemVersionConflict(_item_to_dict(item))
+    session.commit()
+    session.refresh(item)
+    return _item_to_dict(item)
+
+
+def update_item_in_db(
+    item_id: int,
+    raw_text: str,
+    expected_version: Optional[int] = None,
+) -> Optional[dict]:
     owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
@@ -537,10 +649,9 @@ def update_item_in_db(item_id: int, raw_text: str) -> Optional[dict]:
         ):
             return None
 
-        item.raw_text = raw_text
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+        return _apply_item_edit(
+            session, item, {"raw_text": raw_text}, expected_version
+        )
 
 
 def _remove_orphan_tasks(session, item_ids: list[int]) -> None:
@@ -637,18 +748,98 @@ def delete_note_from_db(note_id: int) -> bool:
     return delete_item_from_db(note_id)
 
 
+def _utc_day() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def try_consume_ai_call(limit: int) -> bool:
+    """Count one AI call for the current user today, unless at ``limit``.
+
+    The check and the increment are one conditional UPDATE, so concurrent
+    requests (threads or worker processes) can never exceed the limit.
+    """
+    owner_id = require_owner_id()
+    day = _utc_day()
+    with SessionLocal() as session:
+        for _ in range(2):
+            consumed = session.execute(
+                update(AIUsageRecord)
+                .where(
+                    AIUsageRecord.owner_user_id == owner_id,
+                    AIUsageRecord.day == day,
+                    AIUsageRecord.calls < limit,
+                )
+                .values(calls=AIUsageRecord.calls + 1)
+            )
+            if consumed.rowcount:
+                session.commit()
+                return True
+            exists = session.execute(
+                select(AIUsageRecord.calls).where(
+                    AIUsageRecord.owner_user_id == owner_id,
+                    AIUsageRecord.day == day,
+                )
+            ).first()
+            if exists is not None:
+                session.rollback()
+                return False
+            try:
+                session.add(AIUsageRecord(owner_user_id=owner_id, day=day, calls=1))
+                session.commit()
+                return True
+            except IntegrityError:
+                # Another request created today's row first; retry the UPDATE.
+                session.rollback()
+        return False
+
+
+def get_ai_usage(limit: int) -> dict:
+    owner_id = require_owner_id()
+    day = _utc_day()
+    with SessionLocal() as session:
+        calls = session.execute(
+            select(AIUsageRecord.calls).where(
+                AIUsageRecord.owner_user_id == owner_id,
+                AIUsageRecord.day == day,
+            )
+        ).scalar() or 0
+    return {
+        "day": day,
+        "calls": calls,
+        "limit": limit if limit > 0 else None,
+        "remaining": max(0, limit - calls) if limit > 0 else None,
+    }
+
+
 def start_analysis_run() -> int:
-    started_at = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     owner_id = require_owner_id()
     with SessionLocal() as session:
+        stale_before = (now - ANALYSIS_STALE_AFTER).isoformat()
+        for stale in session.scalars(
+            select(AnalysisRunRecord).where(
+                AnalysisRunRecord.owner_user_id == owner_id,
+                AnalysisRunRecord.status == ANALYSIS_RUNNING,
+                AnalysisRunRecord.started_at < stale_before,
+            )
+        ):
+            stale.status = ANALYSIS_FAILED
+            stale.mode = "error"
+            stale.completed_at = now.isoformat()
+        session.flush()
+
         run = AnalysisRunRecord(
-            started_at=started_at,
+            started_at=now.isoformat(),
             status=ANALYSIS_RUNNING,
             mode="pending",
             owner_user_id=owner_id,
         )
         session.add(run)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise AnalysisAlreadyRunning() from exc
         return run.id
 
 
@@ -846,6 +1037,7 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                 if existing.dismissed:
                     continue
                 existing.score = relation["score"]
+                existing.method = relation["method"]
                 continue
             session.add(
                 ItemRelationRecord(
@@ -853,6 +1045,7 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                     item_id_b=relation["item_id_b"],
                     relation_type=relation["relation_type"],
                     score=relation["score"],
+                    method=relation["method"],
                     created_at=completed_at,
                     dismissed=0,
                 )
@@ -1140,27 +1333,31 @@ def complete_voice_item_processing(
 def update_item_extracted_text(
     item_id: int,
     extracted_text: str,
+    expected_version: Optional[int] = None,
 ) -> Optional[dict]:
     """User edit of extracted/OCR/transcript text (facts), preserving AI description."""
     cleaned = extracted_text.strip()
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         item = session.get(InboxItemRecord, item_id)
-        if item is None:
+        if item is None or item.owner_user_id != owner_id:
             return None
         if item.item_type not in {IMAGE_ITEM_TYPE, VOICE_ITEM_TYPE, PDF_ITEM_TYPE}:
             return None
-        item.extracted_text = cleaned
         if item.item_type == IMAGE_ITEM_TYPE and item.ai_description:
-            item.raw_text = (
+            raw_text = (
                 f"{cleaned}\n\n[AI description — inferred]\n{item.ai_description}"
                 if cleaned
                 else f"[AI description — inferred]\n{item.ai_description}"
             )
         else:
-            item.raw_text = cleaned
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+            raw_text = cleaned
+        return _apply_item_edit(
+            session,
+            item,
+            {"extracted_text": cleaned, "raw_text": raw_text},
+            expected_version,
+        )
 
 
 def add_url_item_to_db(url: str) -> dict:
@@ -1635,6 +1832,7 @@ def list_relations_from_db(
                 "item_id_b": row.item_id_b,
                 "relation_type": row.relation_type,
                 "score": float(row.score),
+                "method": row.method,
                 "dismissed": bool(row.dismissed),
                 "created_at": row.created_at,
             }
@@ -1655,6 +1853,7 @@ def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
             "item_id_b": row.item_id_b,
             "relation_type": row.relation_type,
             "score": float(row.score),
+            "method": row.method,
             "dismissed": True,
             "created_at": row.created_at,
         }

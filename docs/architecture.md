@@ -7,7 +7,7 @@
 - **Migrations:** Alembic (authoritative schema owner)
 - **DB:** SQLite locally (temp/test DBs for development)
 - **UI:** HTML + vanilla JS/CSS
-- **AI:** OpenAI optional; deterministic fallback organizer always available
+- **AI:** Gemini optional; deterministic fallback organizer always available
 
 ## Core modules
 
@@ -16,7 +16,7 @@
 | `app/main.py` | HTTP routes, error shaping |
 | `app/database.py` | Models, persistence helpers, fingerprints, task upsert |
 | `app/schemas.py` | Request/response and analysis contracts |
-| `app/organizer.py` | OpenAI + fallback organization |
+| `app/organizer.py` | Gemini + fallback organization |
 | `app/capture/` | Rich capture (URL, PDF, image, voice, lifecycle) |
 | `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
 | `app/attention/` | Timing parse, attention buckets, briefing helpers |
@@ -32,7 +32,8 @@
 - `topics` — user-editable spaces/projects (seeded defaults)
 - `analysis_runs` — analyze attempts + JSON result (includes inbox fingerprint)
 - `item_insights` — AI category/title/priority/tags/rationale/topic plus user overrides
-- `item_relations` — duplicate / near-duplicate / related pairs (dismissible)
+- `item_relations` — duplicate / near-duplicate / related pairs (dismissible);
+  `method` records `lexical` or `semantic` (AI-inferred) provenance
 - `tasks` / `task_source_items` — durable tasks; multiple tasks per source allowed;
   AI vs confirmed timing distinguished
 
@@ -73,7 +74,11 @@ OCR/vision/transcription adapters degrade gracefully when not configured
 - `GET /api/search?q=` — ranked passages with keyword and semantic scores
 - `POST /api/ask` — extractive grounded answers with per-item citations
 - Insufficient evidence returns an explicit “not enough information” response (no fabrication)
-- Semantic layer is local TF-IDF cosine similarity (no vector database, no paid API in tests)
+- Semantic layer is local embeddings (`fastembed`, `BAAI/bge-small-en-v1.5`) blended with a
+  keyword score, falling back to TF-IDF cosine similarity if the model cannot load
+  (no vector database, no paid API, no network in tests)
+- Related-item links reuse the same embeddings; see `docs/semantic-linking.md` for the
+  design, thresholds and accuracy measurements
 
 ## Attention & safe actions
 
@@ -87,6 +92,6 @@ OCR/vision/transcription adapters degrade gracefully when not configured
 
 ## External services
 
-Automated tests mock OpenAI and must not call paid APIs. Live calls are for
+Automated tests mock Gemini and must not call paid APIs. Live calls are for
 explicit manual smoke testing only. Never enable real Calendar OAuth/writes
 without owner approval.

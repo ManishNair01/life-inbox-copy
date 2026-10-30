@@ -4,7 +4,7 @@ Use a **temporary** database only.
 
 ```bash
 export DATABASE_URL="sqlite:////tmp/life_inbox_manual.db"
-unset OPENAI_API_KEY
+unset GEMINI_API_KEY
 python3 -m alembic upgrade head
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
@@ -26,6 +26,7 @@ Open http://127.0.0.1:8000
 - [ ] After editing inbox post-analysis, stale banner / status appears
 - [ ] Invalid empty note rejected with friendly status
 - [ ] `/api/health` returns `{"status":"ok"}`
+- [ ] `/healthz` returns 200 with `status` ok (503 if the DB is down or the schema is behind)
 
 ## Organization smoke (Milestone 2+)
 
@@ -34,6 +35,9 @@ Open http://127.0.0.1:8000
 - [ ] Multi-action note creates multiple tasks from one source
 - [ ] Confirm date on a task → labeled confirmed; survives re-analyze
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
+- [ ] Paraphrased notes with no shared words (e.g. "order flowers for Mom" / "get a bouquet for Mum") appear under Related Items labelled "AI-inferred" after Analyze (needs the embedding model; first run downloads ~130 MB)
+- [ ] With `LIFE_INBOX_DISABLE_EMBEDDINGS=1`, only text-match links appear and the app still works
+- [ ] A dismissed related pair stays dismissed after re-running Analyze
 - [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
 
 ## Ask My Inbox smoke (Milestone 4+)

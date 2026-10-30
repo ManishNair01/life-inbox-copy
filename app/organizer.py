@@ -1,12 +1,11 @@
 import json
 import logging
-import os
 import re
 
+from app import gemini
 from app.schemas import AnalysisResult
 
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 logger = logging.getLogger(__name__)
 
 
@@ -171,7 +170,7 @@ def validate_analysis_result(result: dict, notes: list[dict]) -> dict:
     return validated.model_dump()
 
 
-def analyze_inbox_with_openai(notes: list[dict]) -> dict:
+def analyze_inbox_with_gemini(notes: list[dict]) -> dict:
     if not notes:
         return validate_analysis_result(
             {
@@ -183,13 +182,10 @@ def analyze_inbox_with_openai(notes: list[dict]) -> dict:
             notes,
         )
 
-    if not os.getenv("OPENAI_API_KEY"):
+    if not gemini.api_key():
         return validate_analysis_result(fallback_analyze(notes), notes)
 
     try:
-        from openai import OpenAI
-        client = OpenAI()
-
         compact_notes = [{"id": n["id"], "text": n["text"]} for n in notes]
 
         prompt = f"""
@@ -253,13 +249,18 @@ Saved notes:
 {json.dumps(compact_notes, ensure_ascii=False)}
 """
 
-        response = client.responses.create(model=MODEL, input=prompt)
-        result = extract_json_object(response.output_text)
-        result["mode"] = "openai"
+        result = extract_json_object(gemini.generate_text(prompt))
+        result["mode"] = "gemini"
         return validate_analysis_result(result, notes)
 
+    except gemini.GeminiUnavailable as exc:
+        logger.warning("Gemini not used (%s); using deterministic fallback", exc)
+        fallback = fallback_analyze(notes)
+        fallback["mode"] = "fallback_after_api_error"
+        return validate_analysis_result(fallback, notes)
+
     except Exception:
-        logger.exception("OpenAI analysis failed; using deterministic fallback")
+        logger.exception("Gemini analysis failed; using deterministic fallback")
         fallback = fallback_analyze(notes)
         fallback["mode"] = "fallback_after_api_error"
         return validate_analysis_result(fallback, notes)

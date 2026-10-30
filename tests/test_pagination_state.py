@@ -29,7 +29,7 @@ def client(tmp_path, monkeypatch):
     test_db_path = tmp_path / "life_inbox_test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
     monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     sys.modules.pop("app.database", None)
     sys.modules.pop("app.main", None)

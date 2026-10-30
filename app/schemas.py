@@ -50,7 +50,9 @@ class InboxItemCreate(InboxItemText):
 
 
 class InboxItemUpdate(InboxItemText):
-    pass
+    # Version the client last read. When set, the edit is rejected with 409 if
+    # the item has changed since. Omit for last-write-wins (older clients).
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 class InboxItem(BaseModel):
@@ -69,18 +71,33 @@ class InboxItem(BaseModel):
     owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
+    version: int = 1
 
 
 class UrlItemCreate(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
 
 
+class AIUsage(BaseModel):
+    # False when no Gemini key is configured: no AI calls are made, so the
+    # quota is irrelevant and fallbacks are not caused by it.
+    ai_enabled: bool = True
+    # True while Gemini is rate-limiting us and calls are paused (circuit breaker).
+    rate_limited: bool = False
+    day: str
+    calls: int
+    limit: Optional[int] = None
+    remaining: Optional[int] = None
+
+
 class ExtractedTextUpdate(BaseModel):
     extracted_text: str = Field(min_length=0, max_length=20000)
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 Priority = Literal["High", "Medium", "Low"]
 AnalysisMode = Literal[
+    "gemini",
     "openai",
     "fallback_no_api_call",
     "fallback_after_api_error",
@@ -281,6 +298,7 @@ class ItemRelation(BaseModel):
     item_id_b: int
     relation_type: str
     score: float
+    method: str = "lexical"
     dismissed: bool
     created_at: str
 

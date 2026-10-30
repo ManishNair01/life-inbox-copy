@@ -1,11 +1,10 @@
 import json
-import os
 
+from app import gemini
 from app.database import add_note_to_db, init_db, list_notes_from_db
 
 
 NUM_DEMO_NOTES = 25
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 FALLBACK_DEMO_NOTES = [
     "Call CA tomorrow about the advance tax calculation.",
@@ -51,14 +50,11 @@ def extract_json_array(raw: str):
 
 
 def generate_demo_notes(n=25):
-    if not os.getenv("OPENAI_API_KEY"):
+    if not gemini.api_key():
         print("No API key found. Using local fallback notes.")
         return FALLBACK_DEMO_NOTES[:n]
 
     try:
-        from openai import OpenAI
-        client = OpenAI()
-
         prompt = f"""
 Generate exactly {n} realistic raw notes from one busy person's personal inbox.
 
@@ -85,8 +81,7 @@ Requirements:
 - Return ONLY a JSON array of strings.
 """
 
-        response = client.responses.create(model=MODEL, input=prompt)
-        generated = extract_json_array(response.output_text)
+        generated = extract_json_array(gemini.generate_text(prompt))
 
         clean = [str(x).strip() for x in generated if str(x).strip()]
         if len(clean) < 20:

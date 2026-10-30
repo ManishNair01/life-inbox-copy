@@ -2,6 +2,6 @@
 __pycache__/
 *.py[cod]
 .env
-data/*.db
+data/*.db*
 data/uploads/
 .DS_Store

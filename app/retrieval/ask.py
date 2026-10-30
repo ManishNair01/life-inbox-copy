@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Optional
 
+from app import gemini
 from app.organizer import extract_json_object
 from app.retrieval.search import RankedPassage, search_passages
 
@@ -21,8 +21,6 @@ _MAX_EVIDENCE_PASSAGES = 5
 _MAX_PASSAGE_CHARS = 400
 _MAX_EVIDENCE_TOTAL_CHARS = 6000
 _MAX_ANSWER_CHARS = 2000
-
-ASK_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 
 def _citation_id(item_id: int, index: int) -> str:
@@ -177,7 +175,7 @@ def _synthesize_from_evidence(
     question: str,
     citations: list[dict],
 ) -> Optional[dict]:
-    """Call OpenAI with retrieved evidence only. Returns validated fields or None."""
+    """Call Gemini with retrieved evidence only. Returns validated fields or None."""
     evidence = _pack_evidence(citations)
     if not evidence:
         return None
@@ -212,11 +210,7 @@ Evidence (JSON):
 {json.dumps(evidence, ensure_ascii=False)}
 """
 
-    from openai import OpenAI
-
-    client = OpenAI()
-    response = client.responses.create(model=ASK_MODEL, input=prompt)
-    raw = getattr(response, "output_text", None)
+    raw = gemini.generate_text(prompt)
     if not isinstance(raw, str) or not raw.strip():
         return None
     parsed = extract_json_object(raw)
@@ -243,13 +237,12 @@ def build_grounded_answer(
         return _insufficient_payload(question)
 
     top = ranked[0]
-    if top.score < 0.2 and top.keyword_score < 0.25:
+    if top.score < 0.19 and top.keyword_score < 0.25:
         return _insufficient_payload(question)
 
     citations = _build_citations(ranked)
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if api_key:
+    if gemini.api_key():
         try:
             synthesized = _synthesize_from_evidence(question, citations)
             if synthesized is not None:
@@ -270,6 +263,8 @@ def build_grounded_answer(
                     "answer_kind": "model_generated",
                     "mode": "llm_grounded",
                 }
+        except gemini.GeminiUnavailable as exc:
+            logger.warning("Ask My Inbox not using Gemini (%s); extractive fallback", exc)
         except Exception:
             logger.exception(
                 "Ask My Inbox LLM synthesis failed; using extractive fallback"

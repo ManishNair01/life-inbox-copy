@@ -55,6 +55,8 @@ from app.database import (
     set_task_reminder_in_db,
     set_task_status,
     snooze_task_in_db,
+    AnalysisAlreadyRunning,
+    ItemVersionConflict,
     start_analysis_run,
     update_item_extracted_text,
     update_item_in_db,
@@ -68,10 +70,11 @@ from app.integrations.calendar import (
     get_draft,
     store_draft,
 )
-from app.organizer import analyze_inbox_with_openai, validate_analysis_result
+from app.organizer import analyze_inbox_with_gemini, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    AIUsage,
     AskRequest,
     AskResponse,
     CalendarConfirmRequest,
@@ -119,6 +122,11 @@ async def bind_owner_from_session(request, call_next):
         set_current_owner_id,
     )
 
+    if request.url.path == "/healthz":
+        # Must work (and report 503) even when the database is down, so skip
+        # the owner lookup, which touches the database.
+        return await call_next(request)
+
     token = request.cookies.get(SESSION_COOKIE)
     owner_id = parse_session_token(token) if token else None
     if owner_id is None:
@@ -131,6 +139,17 @@ async def bind_owner_from_session(request, call_next):
     finally:
         set_current_owner_id(None)
     return response
+
+
+@app.get("/healthz")
+def healthz(response: Response):
+    """Readiness for load balancers and container health checks."""
+    from app.health import readiness
+
+    report, ready = readiness()
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return report
 
 
 @app.get("/api/health")
@@ -149,6 +168,18 @@ def health():
     except Exception as exc:
         logger.exception("Health config check failed")
         return {"status": "degraded", "error": str(exc)}
+
+
+@app.get("/api/usage", response_model=AIUsage)
+def ai_usage():
+    """Today's Gemini call count for the signed-in user."""
+    from app import gemini
+    from app.database import get_ai_usage
+
+    usage = get_ai_usage(gemini.daily_call_limit())
+    usage["ai_enabled"] = gemini.api_key() is not None
+    usage["rate_limited"] = gemini.rate_limited()
+    return usage
 
 
 @app.get("/api/auth/me")
@@ -584,6 +615,20 @@ def get_item_source_file(
     )
 
 
+def _version_conflict(exc: ItemVersionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "version_conflict",
+            "message": (
+                "This item was changed somewhere else since you opened it. "
+                "Reload to see the latest version."
+            ),
+            "current": exc.current,
+        },
+    )
+
+
 @app.patch("/api/items/{item_id}/extracted-text", response_model=InboxItem)
 def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
     item = get_item_from_db(item_id)
@@ -594,7 +639,14 @@ def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
             status_code=400,
             detail="Extracted text can only be edited for image, voice, or PDF items.",
         )
-    updated = update_item_extracted_text(item_id, payload.extracted_text)
+    try:
+        updated = update_item_extracted_text(
+            item_id,
+            payload.extracted_text,
+            expected_version=payload.expected_version,
+        )
+    except ItemVersionConflict as exc:
+        raise _version_conflict(exc) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail="Item not found.")
     return updated
@@ -660,7 +712,11 @@ def read_item(item_id: int):
 @app.put("/api/items/{item_id}", response_model=InboxItem)
 def update_item(item_id: int, payload: InboxItemUpdate):
     try:
-        item = update_item_in_db(item_id, payload.raw_text)
+        item = update_item_in_db(
+            item_id, payload.raw_text, expected_version=payload.expected_version
+        )
+    except ItemVersionConflict as exc:
+        raise _version_conflict(exc) from exc
     except Exception as exc:
         logger.exception("Failed to update inbox item")
         raise HTTPException(
@@ -1196,9 +1252,14 @@ def analyze_inbox():
     try:
         run_id = start_analysis_run()
         notes = list_notes_from_db()
-        raw_result = analyze_inbox_with_openai(notes)
+        raw_result = analyze_inbox_with_gemini(notes)
         result = validate_analysis_result(raw_result, notes)
         return complete_analysis_run(run_id, result)
+    except AnalysisAlreadyRunning as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running. Please wait for it to finish.",
+        ) from exc
     except Exception as exc:
         if run_id is not None:
             try:

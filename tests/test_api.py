@@ -28,7 +28,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
     monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("LIFE_INBOX_UPLOAD_DIR", str(tmp_path / "uploads"))
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     for module_name in (
         "app.main",
@@ -114,6 +114,7 @@ def test_create_and_list_canonical_text_item(client):
         "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
+        "version": 1,
     }
     assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]
@@ -486,7 +487,7 @@ def test_analyze_empty_inbox(client):
     assert client.get("/api/analyze/latest").json() == data
 
 
-def test_analyze_uses_deterministic_fallback_without_openai_key(client):
+def test_analyze_uses_deterministic_fallback_without_gemini_key(client):
     note_text = "Call the team tomorrow"
     create_response = client.post("/api/notes", json={"text": note_text})
 
@@ -679,10 +680,10 @@ def test_reanalysis_updates_task_by_source_without_changing_status(
                     else []
                 ),
             },
-            "mode": "openai",
+            "mode": "gemini",
         }
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", analyze)
 
     client.post("/api/analyze")
     original = client.get("/api/tasks").json()[0]
@@ -710,7 +711,7 @@ def test_generated_task_preserves_multiple_source_links(client, monkeypatch):
 
     monkeypatch.setattr(
         main,
-        "analyze_inbox_with_openai",
+        "analyze_inbox_with_gemini",
         lambda _notes: {
             "buckets": [
                 {
@@ -745,7 +746,7 @@ def test_generated_task_preserves_multiple_source_links(client, monkeypatch):
                 ],
                 "Low": [],
             },
-            "mode": "openai",
+            "mode": "gemini",
         },
     )
 
@@ -787,7 +788,7 @@ def test_failed_analysis_keeps_previous_success(client, monkeypatch):
     def fail_analysis(_notes):
         raise RuntimeError("simulated provider failure")
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_analysis)
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", fail_analysis)
 
     failed_response = client.post("/api/analyze")
 
@@ -815,12 +816,12 @@ def test_invalid_analysis_result_is_not_saved(client, monkeypatch):
 
     monkeypatch.setattr(
         main,
-        "analyze_inbox_with_openai",
+        "analyze_inbox_with_gemini",
         lambda _notes: {
             "buckets": [],
             "todos": [],
             "priority_view": {"High": [], "Medium": [], "Low": []},
-            "mode": "openai",
+            "mode": "gemini",
         },
     )
 
@@ -912,9 +913,9 @@ def test_analyze_returns_friendly_error(client, monkeypatch):
     main = sys.modules["app.main"]
 
     def fail_to_analyze(_notes):
-        raise RuntimeError("OPENAI_API_KEY=super-secret")
+        raise RuntimeError("GEMINI_API_KEY=super-secret")
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_to_analyze)
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", fail_to_analyze)
 
     response = client.post("/api/analyze")
 
@@ -925,10 +926,8 @@ def test_analyze_returns_friendly_error(client, monkeypatch):
     assert "super-secret" not in response.text
 
 
-def test_valid_mocked_openai_output_is_validated(monkeypatch):
-    import openai
-
-    from app import organizer
+def test_valid_mocked_gemini_output_is_validated(monkeypatch):
+    from app import gemini, organizer
 
     model_output = {
         "buckets": [
@@ -957,19 +956,12 @@ def test_valid_mocked_openai_output_is_validated(monkeypatch):
             "Low": [],
         },
     }
-    fake_responses = SimpleNamespace(
-        create=lambda **_kwargs: SimpleNamespace(
-            output_text=json.dumps(model_output)
-        )
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
+        gemini, "generate_text", lambda _prompt: json.dumps(model_output)
     )
 
-    result = organizer.analyze_inbox_with_openai(
+    result = organizer.analyze_inbox_with_gemini(
         [
             {
                 "id": 1,
@@ -979,28 +971,17 @@ def test_valid_mocked_openai_output_is_validated(monkeypatch):
         ]
     )
 
-    assert result["mode"] == "openai"
+    assert result["mode"] == "gemini"
     assert result["buckets"][0]["notes"][0]["priority"] == "Medium"
 
 
-def test_malformed_mocked_openai_output_uses_fallback(monkeypatch):
-    import openai
+def test_malformed_mocked_gemini_output_uses_fallback(monkeypatch):
+    from app import gemini, organizer
 
-    from app import organizer
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(gemini, "generate_text", lambda _prompt: "not valid JSON")
 
-    fake_responses = SimpleNamespace(
-        create=lambda **_kwargs: SimpleNamespace(
-            output_text="not valid JSON"
-        )
-    )
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
-    monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
-    )
-
-    result = organizer.analyze_inbox_with_openai(
+    result = organizer.analyze_inbox_with_gemini(
         [
             {
                 "id": 1,
@@ -1014,18 +995,16 @@ def test_malformed_mocked_openai_output_uses_fallback(monkeypatch):
     assert result["buckets"][0]["notes"][0]["id"] == 1
 
 
-def test_openai_failure_fallback_omits_technical_details(monkeypatch):
-    import openai
+def test_gemini_failure_fallback_omits_technical_details(monkeypatch):
+    from app import gemini, organizer
 
-    from app import organizer
+    def fail_generation(_prompt):
+        raise RuntimeError("GEMINI_API_KEY=super-secret")
 
-    def fail_client_creation():
-        raise RuntimeError("OPENAI_API_KEY=super-secret")
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(gemini, "generate_text", fail_generation)
 
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
-    monkeypatch.setattr(openai, "OpenAI", fail_client_creation)
-
-    result = organizer.analyze_inbox_with_openai(
+    result = organizer.analyze_inbox_with_gemini(
         [
             {
                 "id": 1,
@@ -1205,10 +1184,10 @@ def test_confirm_task_timing_is_preserved_on_reanalysis(client, monkeypatch):
                 "Medium": [],
                 "Low": [],
             },
-            "mode": "openai",
+            "mode": "gemini",
         }
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", analyze)
     client.post("/api/analyze")
     task = client.get("/api/tasks").json()[0]
     confirmed = client.post(
@@ -1661,32 +1640,24 @@ def test_voice_transcript_is_editable_and_analyzable(client, monkeypatch):
     assert updated["id"] in ids
 
 
-def _mock_openai_transcription(monkeypatch, text=None, *, raise_on_create=None):
-    import openai
+def _mock_gemini_transcription(monkeypatch, text=None, *, raise_on_create=None):
+    from app import gemini
 
-    def create(**_kwargs):
+    def transcribe(_data, _mime_type):
         if raise_on_create is not None:
             raise raise_on_create
-        return SimpleNamespace(text=text or "")
+        return text or ""
 
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
     monkeypatch.delenv("LIFE_INBOX_DISABLE_TRANSCRIPTION", raising=False)
-    monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda: SimpleNamespace(
-            audio=SimpleNamespace(
-                transcriptions=SimpleNamespace(create=create)
-            )
-        ),
-    )
+    monkeypatch.setattr(gemini, "transcribe_audio", transcribe)
 
 
 def test_voice_transcription_success_persists_transcript(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
 
     wav = make_wav_bytes()
-    _mock_openai_transcription(
+    _mock_gemini_transcription(
         monkeypatch,
         "Remember to renew car insurance before Friday",
     )
@@ -1700,7 +1671,7 @@ def test_voice_transcription_success_persists_transcript(client, monkeypatch):
     assert item["extracted_text"] == "Remember to renew car insurance before Friday"
     assert "car insurance" in (item["raw_text"] or "").lower()
     assert "transcript pending" not in (item["raw_text"] or "").lower()
-    assert "OPENAI" not in (item["raw_text"] or "")
+    assert "GEMINI" not in (item["raw_text"] or "")
     assert "exception" not in (item.get("error_message") or "").lower()
 
     audio = client.get(f"/api/items/{item['id']}/file")
@@ -1712,7 +1683,7 @@ def test_voice_transcription_success_persists_transcript(client, monkeypatch):
 def test_voice_transcription_no_key_keeps_item_editable(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("LIFE_INBOX_DISABLE_TRANSCRIPTION", raising=False)
 
     item = client.post(
@@ -1739,9 +1710,9 @@ def test_voice_transcription_api_failure_preserves_audio(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
 
     wav = make_wav_bytes()
-    _mock_openai_transcription(
+    _mock_gemini_transcription(
         monkeypatch,
-        raise_on_create=RuntimeError("OPENAI_API_KEY=super-secret provider boom"),
+        raise_on_create=RuntimeError("GEMINI_API_KEY=super-secret provider boom"),
     )
 
     item = client.post(
@@ -1753,7 +1724,7 @@ def test_voice_transcription_api_failure_preserves_audio(client, monkeypatch):
     assert item["extracted_text"] == ""
     assert "temporarily unavailable" in (item["raw_text"] or "").lower()
     assert "super-secret" not in (item["raw_text"] or "")
-    assert "OPENAI_API_KEY" not in (item["raw_text"] or "")
+    assert "GEMINI_API_KEY" not in (item["raw_text"] or "")
     assert "provider boom" not in (item["raw_text"] or "")
     assert "Traceback" not in (item["raw_text"] or "")
 
@@ -1771,39 +1742,35 @@ def test_voice_transcription_api_failure_preserves_audio(client, monkeypatch):
 
 def test_voice_transcription_uses_env_model(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
-    import openai
+    from app import gemini
 
     seen = {}
 
-    def create(**kwargs):
-        seen["model"] = kwargs.get("model")
-        return SimpleNamespace(text="hello from custom model")
+    def fake_post(model, body):
+        seen["model"] = model
+        return {
+            "candidates": [
+                {"content": {"parts": [{"text": "hello from custom model"}]}}
+            ]
+        }
 
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
-    monkeypatch.setenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
+    monkeypatch.setenv("GEMINI_TRANSCRIPTION_MODEL", "gemini-test-transcribe")
     monkeypatch.delenv("LIFE_INBOX_DISABLE_TRANSCRIPTION", raising=False)
-    monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda: SimpleNamespace(
-            audio=SimpleNamespace(
-                transcriptions=SimpleNamespace(create=create)
-            )
-        ),
-    )
+    monkeypatch.setattr(gemini, "_post", fake_post)
 
     item = client.post(
         "/api/items/voice",
         files={"file": ("memo.wav", make_wav_bytes(), "audio/wav")},
     ).json()
-    assert seen["model"] == "gpt-4o-mini-transcribe"
+    assert seen["model"] == "gemini-test-transcribe"
     assert item["extracted_text"] == "hello from custom model"
 
 
 def test_voice_transcription_owner_isolation(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
 
-    _mock_openai_transcription(
+    _mock_gemini_transcription(
         monkeypatch,
         "Alice private voice memo about yacht taxes",
     )
@@ -1839,7 +1806,7 @@ def test_voice_transcription_owner_isolation(client, monkeypatch):
 def test_voice_transcript_flows_into_ask_retrieval(client, monkeypatch):
     from tests.voice_fixtures import make_wav_bytes
 
-    _mock_openai_transcription(
+    _mock_gemini_transcription(
         monkeypatch,
         "Order Atomic Habits this weekend after Rohan's recommendation",
     )
@@ -2045,3 +2012,50 @@ def test_health_includes_config_metadata(client):
     assert payload["status"] == "ok"
     assert "environment" in payload
     assert "database" in payload
+
+
+def test_second_analysis_while_one_is_running_returns_409(client):
+    from app import database
+
+    client.post("/api/notes", json={"text": "Call the dentist tomorrow"})
+    run_id = database.start_analysis_run()
+
+    response = client.post("/api/analyze")
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+
+    database.fail_analysis_run(run_id)
+    assert client.post("/api/analyze").status_code == 200
+
+
+def test_stale_running_analysis_does_not_block_new_runs(client):
+    from datetime import datetime, timedelta, timezone
+
+    from app import database
+
+    database.start_analysis_run()
+    old = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    with database.SessionLocal() as session:
+        run = session.query(database.AnalysisRunRecord).one()
+        run.started_at = old
+        session.commit()
+
+    assert database.start_analysis_run() > 0
+    with database.SessionLocal() as session:
+        statuses = sorted(r.status for r in session.query(database.AnalysisRunRecord))
+    assert statuses == ["failed", "running"]
+
+
+def test_failed_analysis_releases_the_running_slot(client, monkeypatch):
+    from app import main
+
+    client.post("/api/notes", json={"text": "Buy milk"})
+
+    def boom(notes):
+        raise RuntimeError("boom")
+
+    original = main.analyze_inbox_with_gemini
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", boom)
+    assert client.post("/api/analyze").status_code == 500
+    monkeypatch.setattr(main, "analyze_inbox_with_gemini", original)
+    assert client.post("/api/analyze").status_code == 200
