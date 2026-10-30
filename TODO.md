@@ -43,16 +43,18 @@ explicit user confirmation, and AI-inferred content stays labelled.
       and whether a Gemini key is configured.
 
 ## Multi-user concurrency
-Status: phases 1-4 of 5 done (analysis guard, embedding cache race, SQLite WAL, Gemini cap). Next: parallel-users test.
-- [x] **SQLite settings.** *(Phase 3, done: WAL plus an explicit 5 s busy timeout. Correction: the sqlite3 driver already defaulted to a 5 s timeout, so WAL is the real change. Postgres is documented for more than a few active users.)*
-- [x] **One analysis run per user at a time.** *(Phase 1, done: partial unique index via migration 0013, 409 on conflict, runs stale after 10 min.)* `start_analysis_run` does not check
-      for a running run, so a double click starts two Gemini calls and two
-      writers. Reject or reuse the in-flight run.
-- [x] **Global cap on concurrent Gemini calls.** *(Phase 4, done: semaphore, `GEMINI_MAX_CONCURRENT`, default 4; callers fall back after a 20 s wait. Per-user quotas remain under Operations.)*
-- [x] **Fix the embedding cache race.** *(Phase 2, done: cache guarded by its own lock, lookups use a local snapshot.)* `_cache` in `app/retrieval/embeddings.py`
-      is mutated without the lock, and `_cache.clear()` during another request's
-      lookup raises `KeyError`, which is caught and silently becomes a fallback.
-- [ ] **Concurrency test:** N users doing capture, search and analyze in parallel
-      against a temp DB, asserting no cross-user data and no lock errors.
+Status: 5 of 6 done. Remaining: per-item edit conflicts.
+- [x] **SQLite settings.** WAL plus an explicit 5 s busy timeout (the sqlite3
+      driver already defaulted to 5 s, so WAL is the real change). Postgres is
+      documented for more than a few active users.
+- [x] **One analysis run per user at a time.** Partial unique index (migration
+      0013), 409 on conflict, runs expire after 10 min.
+- [x] **Global cap on concurrent Gemini calls.** Semaphore,
+      `GEMINI_MAX_CONCURRENT` (default 4); callers fall back after a 20 s wait.
+      Per-user quotas remain under Operations.
+- [x] **Embedding cache race.** Cache has its own lock; lookups use a local snapshot.
+- [x] **Concurrency test.** `tests/test_concurrency.py`: 5 users in parallel doing
+      capture, analyze, search, Ask and tasks against one temp DB; asserts no
+      errors, disjoint ids, and no cross-user data in any response.
 - [ ] **Per-item edit conflicts** (version or `updated_at` check) for the same
       user editing from two tabs or devices.

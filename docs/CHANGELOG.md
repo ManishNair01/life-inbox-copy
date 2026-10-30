@@ -81,7 +81,9 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   `tests/test_search_scoring.py`,
   `tests/test_semantic_relations.py`. Updated: `test_api.py`, `test_retrieval.py`,
   `test_migrations.py`, `test_pagination_state.py`.
-- Suite: 145 passed with `GEMINI_API_KEY` unset.
+- `tests/test_concurrency.py` (5 users in parallel, no collisions or leaks),
+  `tests/test_sqlite_settings.py` (WAL, busy timeout, parallel writers).
+- Suite: 155 passed with `GEMINI_API_KEY` unset.
 
 ### Repo hygiene
 - `requirements.txt` uses compatible-release pins; `pytest` and `httpx` moved to
