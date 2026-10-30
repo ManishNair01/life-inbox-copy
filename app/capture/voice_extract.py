@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app import gemini
 from app.capture.storage import MAX_AUDIO_BYTES
 
 logger = logging.getLogger(__name__)
@@ -108,14 +109,6 @@ def _title_from_filename(filename: str) -> str:
     return stem or "Voice note"
 
 
-def _transcription_model() -> str:
-    """Model for audio transcription; override via OPENAI_TRANSCRIPTION_MODEL."""
-    return (
-        os.getenv("OPENAI_TRANSCRIPTION_MODEL", "").strip()
-        or "whisper-1"
-    )
-
-
 def _friendly_transcription_unavailable_note() -> str:
     return (
         "Transcription is temporarily unavailable. You can edit the "
@@ -146,35 +139,22 @@ def transcribe_audio(
             "note": "Transcription disabled via LIFE_INBOX_DISABLE_TRANSCRIPTION.",
         }
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    if not gemini.api_key():
         return {
             "text": "",
             "provider": "none",
             "available": False,
             "note": (
-                "Transcription not configured. Set OPENAI_API_KEY for live "
+                "Transcription not configured. Set GEMINI_API_KEY for live "
                 "transcription, or edit the transcript manually."
             ),
         }
 
     try:
-        from openai import OpenAI
-
-        client = OpenAI()
-        model = _transcription_model()
-        safe_name = _normalize_filename(original_filename)
-        result = client.audio.transcriptions.create(
-            model=model,
-            file=(safe_name, data, mime_type or "application/octet-stream"),
-        )
-        if isinstance(result, str):
-            text = result.strip()
-        else:
-            text = str(getattr(result, "text", "") or "").strip()
+        text = gemini.transcribe_audio(data, mime_type).strip()
         return {
             "text": text,
-            "provider": "openai",
+            "provider": "gemini",
             "available": True,
             "note": None if text else "Transcription returned no spoken text.",
         }

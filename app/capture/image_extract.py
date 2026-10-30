@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app import gemini
 from app.capture.storage import MAX_IMAGE_BYTES
 
 logger = logging.getLogger(__name__)
@@ -181,8 +182,7 @@ def describe_image(
             original_filename, mime_type, ocr_text, ocr_note
         )
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    if not gemini.api_key():
         return _fallback_description(
             original_filename, mime_type, ocr_text, ocr_note
         )

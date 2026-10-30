@@ -13,7 +13,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
     monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
     monkeypatch.setenv("LIFE_INBOX_UPLOAD_DIR", str(tmp_path / "uploads"))
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     for module_name in (
         "app.main",
@@ -51,20 +51,16 @@ def _seed_atomic_habits(client):
     ).json()
 
 
-def _mock_ask_openai(monkeypatch, output_text=None, *, raise_on_create=None):
-    import openai
+def _mock_ask_gemini(monkeypatch, output_text=None, *, raise_on_create=None):
+    from app import gemini
 
-    def create(**_kwargs):
+    def generate(_prompt):
         if raise_on_create is not None:
             raise raise_on_create
-        return SimpleNamespace(output_text=output_text)
+        return output_text
 
-    monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
-    monkeypatch.setattr(
-        openai,
-        "OpenAI",
-        lambda: SimpleNamespace(responses=SimpleNamespace(create=create)),
-    )
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-for-test")
+    monkeypatch.setattr(gemini, "generate_text", generate)
 
 
 def test_search_finds_keyword_matches(client):
@@ -119,7 +115,7 @@ def test_ask_llm_grounded_answer_with_citations(client, monkeypatch):
     cite_id = probe["citations"][0]["id"]
     assert probe["citations"][0]["item_id"] == created["id"]
 
-    _mock_ask_openai(
+    _mock_ask_gemini(
         monkeypatch,
         json.dumps(
             {
@@ -140,11 +136,11 @@ def test_ask_llm_grounded_answer_with_citations(client, monkeypatch):
     assert data["citations"]
     assert all(c["item_id"] == created["id"] for c in data["citations"])
     assert data["citations"][0]["id"] == cite_id
-    assert "OpenAI" not in data["answer"]
+    assert "Gemini" not in data["answer"]
     assert "api" not in data["answer"].lower()
 
 
-def test_ask_falls_back_without_openai_key(client):
+def test_ask_falls_back_without_gemini_key(client):
     created = _seed_atomic_habits(client)
     data = client.post(
         "/api/ask",
@@ -156,11 +152,11 @@ def test_ask_falls_back_without_openai_key(client):
     assert "Atomic Habits" in data["answer"]
 
 
-def test_ask_falls_back_on_openai_api_error(client, monkeypatch):
+def test_ask_falls_back_on_gemini_api_error(client, monkeypatch):
     created = _seed_atomic_habits(client)
-    _mock_ask_openai(
+    _mock_ask_gemini(
         monkeypatch,
-        raise_on_create=RuntimeError("OPENAI_API_KEY=super-secret"),
+        raise_on_create=RuntimeError("GEMINI_API_KEY=super-secret"),
     )
 
     data = client.post(
@@ -171,13 +167,13 @@ def test_ask_falls_back_on_openai_api_error(client, monkeypatch):
     assert data["confidence"] != "insufficient"
     assert any(c["item_id"] == created["id"] for c in data["citations"])
     assert "super-secret" not in data["answer"]
-    assert "OPENAI" not in data["answer"]
+    assert "GEMINI" not in data["answer"]
     assert "exception" not in data["answer"].lower()
 
 
 def test_ask_falls_back_on_malformed_model_response(client, monkeypatch):
     created = _seed_atomic_habits(client)
-    _mock_ask_openai(monkeypatch, "not valid JSON {{{")
+    _mock_ask_gemini(monkeypatch, "not valid JSON {{{")
 
     data = client.post(
         "/api/ask",
@@ -189,7 +185,7 @@ def test_ask_falls_back_on_malformed_model_response(client, monkeypatch):
 
 def test_ask_falls_back_on_unvalidated_citation_ids(client, monkeypatch):
     created = _seed_atomic_habits(client)
-    _mock_ask_openai(
+    _mock_ask_gemini(
         monkeypatch,
         json.dumps(
             {
@@ -217,7 +213,7 @@ def test_ask_llm_insufficient_when_model_says_so(client, monkeypatch):
     ).json()
     cite_id = probe["citations"][0]["id"]
 
-    _mock_ask_openai(
+    _mock_ask_gemini(
         monkeypatch,
         json.dumps(
             {
@@ -275,7 +271,7 @@ def test_ask_user_isolation_prevents_cross_account_citations(client, monkeypatch
     assert bob_create.status_code == 200
 
     # Even with a mocked LLM, Bob must not retrieve or cite Alice's item.
-    _mock_ask_openai(
+    _mock_ask_gemini(
         monkeypatch,
         json.dumps(
             {

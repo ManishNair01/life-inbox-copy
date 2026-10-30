@@ -81,6 +81,7 @@ class ExtractedTextUpdate(BaseModel):
 
 Priority = Literal["High", "Medium", "Low"]
 AnalysisMode = Literal[
+    "gemini",
     "openai",
     "fallback_no_api_call",
     "fallback_after_api_error",
@@ -281,6 +282,7 @@ class ItemRelation(BaseModel):
     item_id_b: int
     relation_type: str
     score: float
+    method: str = "lexical"
     dismissed: bool
     created_at: str
 
