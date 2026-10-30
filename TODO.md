@@ -43,13 +43,12 @@ explicit user confirmation, and AI-inferred content stays labelled.
       and whether a Gemini key is configured.
 
 ## Multi-user concurrency
-Status: phases 1-3 of 5 done (analysis guard, embedding cache race, SQLite WAL). Next: Gemini cap, parallel-users test.
+Status: phases 1-4 of 5 done (analysis guard, embedding cache race, SQLite WAL, Gemini cap). Next: parallel-users test.
 - [x] **SQLite settings.** *(Phase 3, done: WAL plus an explicit 5 s busy timeout. Correction: the sqlite3 driver already defaulted to a 5 s timeout, so WAL is the real change. Postgres is documented for more than a few active users.)*
 - [x] **One analysis run per user at a time.** *(Phase 1, done: partial unique index via migration 0013, 409 on conflict, runs stale after 10 min.)* `start_analysis_run` does not check
       for a running run, so a double click starts two Gemini calls and two
       writers. Reject or reuse the in-flight run.
-- [ ] **Global cap on concurrent Gemini calls** (semaphore) so slow calls with
-      retries cannot exhaust the threadpool.
+- [x] **Global cap on concurrent Gemini calls.** *(Phase 4, done: semaphore, `GEMINI_MAX_CONCURRENT`, default 4; callers fall back after a 20 s wait. Per-user quotas remain under Operations.)*
 - [x] **Fix the embedding cache race.** *(Phase 2, done: cache guarded by its own lock, lookups use a local snapshot.)* `_cache` in `app/retrieval/embeddings.py`
       is mutated without the lock, and `_cache.clear()` during another request's
       lookup raises `KeyError`, which is caught and silently becomes a fallback.

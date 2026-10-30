@@ -111,6 +111,10 @@ is stored in the database.
   `sqlite3 .backup`), and keep the file on a local disk, not a network share.
 - SQLite still allows only one writer at a time. It suits a handful of active
   users; use Postgres (see the compose sketch) for more.
+- At most `GEMINI_MAX_CONCURRENT` (default 4) Gemini requests run at once per
+  process, so slow calls cannot occupy every server thread. A request that
+  cannot get a slot within 20 s uses the normal fallback (keyword search,
+  extractive answer, deterministic analysis, empty transcript).
 - A user can have only one analysis running at a time (database-enforced).
   A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
   10 minutes is treated as crashed and expired.

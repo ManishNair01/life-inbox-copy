@@ -87,3 +87,80 @@ def test_api_key_is_not_logged_on_http_failure(monkeypatch, caplog):
     assert secret not in str(raised.value)
     assert secret not in caplog.text
     assert secret not in str(voice_result)
+
+
+def test_concurrent_gemini_calls_are_capped(monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    monkeypatch.setattr(gemini, "_slots", threading.BoundedSemaphore(2))
+    state = {"now": 0, "peak": 0}
+    guard = threading.Lock()
+
+    def slow_post(url, headers, json, timeout):
+        with guard:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        time.sleep(0.05)
+        with guard:
+            state["now"] -= 1
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+        )
+
+    monkeypatch.setattr(gemini.requests, "post", slow_post)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(gemini.generate_text("hi")))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == ["ok"] * 8
+    assert state["peak"] <= 2
+
+
+def test_busy_gemini_raises_and_callers_fall_back(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    exhausted = threading.BoundedSemaphore(1)
+    exhausted.acquire()
+    monkeypatch.setattr(gemini, "_slots", exhausted)
+    monkeypatch.setattr(gemini, "SLOT_WAIT_SECONDS", 0.01)
+
+    with pytest.raises(gemini.GeminiBusy):
+        gemini.generate_text("hi")
+
+    from app.organizer import analyze_inbox_with_gemini
+
+    result = analyze_inbox_with_gemini([{"id": 1, "text": "Call the dentist"}])
+    assert result["mode"] == "fallback_after_api_error"
+
+    voice = voice_extract.transcribe_audio(
+        b"abc", original_filename="m.wav", mime_type="audio/wav"
+    )
+    assert voice["available"] is False
+
+
+def test_gemini_slot_is_released_after_errors(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(gemini, "_slots", slots)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _s: None)
+
+    def failing_post(url, headers, json, timeout):
+        raise gemini.requests.ConnectionError()
+
+    monkeypatch.setattr(gemini.requests, "post", failing_post)
+    with pytest.raises(gemini.requests.ConnectionError):
+        gemini.generate_text("hi")
+
+    assert slots.acquire(blocking=False)

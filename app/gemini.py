@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 import time
 
 import requests
@@ -17,6 +18,26 @@ MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 1.5
 # 429 is deliberately absent: quota exhaustion will not clear in seconds.
 RETRYABLE_STATUSES = {500, 502, 503, 504}
+
+# Requests run on the server's threadpool, so unlimited concurrent Gemini calls
+# (each up to TIMEOUT_SECONDS) could occupy every worker thread. Callers that
+# cannot get a slot in time get GeminiBusy and use their normal fallback.
+DEFAULT_MAX_CONCURRENT = 4
+SLOT_WAIT_SECONDS = 20
+
+
+class GeminiBusy(Exception):
+    """Too many Gemini calls are already in flight."""
+
+
+def _max_concurrent() -> int:
+    try:
+        return max(1, int(os.getenv("GEMINI_MAX_CONCURRENT", "")))
+    except ValueError:
+        return DEFAULT_MAX_CONCURRENT
+
+
+_slots = threading.BoundedSemaphore(_max_concurrent())
 
 TRANSCRIBE_PROMPT = (
     "Transcribe the speech in this audio verbatim. Return only the transcript "
@@ -40,14 +61,21 @@ def _post(model: str, body: dict) -> dict:
     """POST to Gemini, retrying transient overload/timeout errors."""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            response = requests.post(
-                f"{API_BASE}/models/{model}:generateContent",
-                headers={"x-goog-api-key": api_key() or ""},
-                json=body,
-                timeout=TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            return response.json()
+            if not _slots.acquire(timeout=SLOT_WAIT_SECONDS):
+                raise GeminiBusy(
+                    "Too many concurrent Gemini requests; try again shortly."
+                )
+            try:
+                response = requests.post(
+                    f"{API_BASE}/models/{model}:generateContent",
+                    headers={"x-goog-api-key": api_key() or ""},
+                    json=body,
+                    timeout=TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                return response.json()
+            finally:
+                _slots.release()
         except (requests.Timeout, requests.ConnectionError):
             if attempt == MAX_ATTEMPTS:
                 raise
