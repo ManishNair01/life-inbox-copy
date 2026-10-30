@@ -37,8 +37,13 @@ explicit user confirmation, and AI-inferred content stays labelled.
       since migrations deliberately disable downgrade.
 
 ## Operations
-- [ ] **Gemini cost and rate controls:** per-user daily cap, call-count logging,
-      circuit breaker after repeated 429s.
+- [x] **Per-user Gemini daily quota.** `ai_usage` table (migration 0015),
+      `GEMINI_DAILY_CALL_LIMIT` (default 100, 0 = off), atomic conditional UPDATE,
+      `GET /api/usage`, fallbacks when exhausted.
+- [ ] **Circuit breaker after repeated 429s** from Gemini (pause calls for a
+      cool-down instead of spending quota on calls that will fail).
+- [ ] **Quota visibility in the UI** (show remaining calls; say why a fallback
+      was used).
 - [ ] **`/healthz`:** report DB reachability, whether the embedding model loaded,
       and whether a Gemini key is configured.
 
