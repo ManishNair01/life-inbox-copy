@@ -65,12 +65,24 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 
+# How long a writer waits for SQLite's single write lock before giving up.
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
 @event.listens_for(Engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
-    """SQLite only enforces CASCADE when foreign_keys pragma is on."""
+def _configure_sqlite(dbapi_connection, connection_record):
+    """Per-connection SQLite settings.
+
+    foreign_keys: SQLite only enforces CASCADE when the pragma is on.
+    busy_timeout: wait for the write lock instead of failing "database is locked".
+    journal_mode=WAL: readers no longer block the writer (and vice versa). It is
+    stored in the database file and is a no-op for in-memory databases.
+    """
     if dbapi_connection.__class__.__module__.startswith("sqlite3"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 
 

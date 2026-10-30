@@ -43,10 +43,8 @@ explicit user confirmation, and AI-inferred content stays labelled.
       and whether a Gemini key is configured.
 
 ## Multi-user concurrency
-Status: phases 1-2 of 5 done (analysis guard, embedding cache race). Next: SQLite WAL, Gemini cap, parallel-users test.
-- [ ] **SQLite settings:** enable WAL and a `busy_timeout` (no `journal_mode` or
-      `busy_timeout` is set today), or document Postgres as required for more
-      than one active user.
+Status: phases 1-3 of 5 done (analysis guard, embedding cache race, SQLite WAL). Next: Gemini cap, parallel-users test.
+- [x] **SQLite settings.** *(Phase 3, done: WAL plus an explicit 5 s busy timeout. Correction: the sqlite3 driver already defaulted to a 5 s timeout, so WAL is the real change. Postgres is documented for more than a few active users.)*
 - [x] **One analysis run per user at a time.** *(Phase 1, done: partial unique index via migration 0013, 409 on conflict, runs stale after 10 min.)* `start_analysis_run` does not check
       for a running run, so a double click starts two Gemini calls and two
       writers. Reject or reuse the in-flight run.

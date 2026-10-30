@@ -103,6 +103,18 @@ first time it is needed, so:
 Embeddings are computed on demand and cached in memory only; nothing about them
 is stored in the database.
 
+## Concurrency and database choice
+
+- SQLite connections run in WAL mode with a 5 s busy timeout, so readers do not
+  block the single writer and short write bursts queue instead of failing. WAL
+  keeps `-wal` and `-shm` files next to the database: back up all three (or use
+  `sqlite3 .backup`), and keep the file on a local disk, not a network share.
+- SQLite still allows only one writer at a time. It suits a handful of active
+  users; use Postgres (see the compose sketch) for more.
+- A user can have only one analysis running at a time (database-enforced).
+  A second `POST /api/analyze` gets `409`; a run stuck in `running` for over
+  10 minutes is treated as crashed and expired.
+
 ## Migrations / backups / rollback
 
 - Alembic is the only schema owner: `alembic upgrade head`

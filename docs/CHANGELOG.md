@@ -68,6 +68,11 @@ Newest first. This entry covers the uncommitted work on `feat/gemini-backend`
   snapshot, so one request clearing the cache can no longer raise `KeyError` in
   another and silently degrade it to keyword search.
 
+### Changed: SQLite concurrency settings
+- Every SQLite connection now sets WAL journal mode, a 5 s `busy_timeout` and
+  foreign keys. `docs/deployment.md` documents backups of the WAL files and when
+  to move to Postgres.
+
 ### Tests
 - New: `tests/conftest.py` (clears Gemini keys, disables embeddings by default),
   `tests/test_gemini.py`, `tests/test_gemini_failures.py` (blocked/empty responses,
