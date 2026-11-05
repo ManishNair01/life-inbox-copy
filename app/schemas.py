@@ -210,6 +210,28 @@ class TaskCreate(BaseModel):
     priority: Priority = "Medium"
     due_on: Optional[date] = None
 
+class TaskUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    priority: Optional[Priority] = None
+    due_on: Optional[date] = None
+    clear_due_date: bool = False
+
+    @model_validator(mode="after")
+    def require_a_change(self):
+        if (
+            self.text is None
+            and self.priority is None
+            and self.due_on is None
+            and not self.clear_due_date
+        ):
+            raise ValueError("Nothing to update.")
+        if self.due_on is not None and self.clear_due_date:
+            raise ValueError("Choose a new date or clear it, not both.")
+        return self
+
+
 class TaskTimingConfirm(BaseModel):
     timing_text: Optional[str] = Field(default=None, max_length=200)
 

@@ -24,6 +24,17 @@ LIFE_INBOX_OTP_PEPPER=<32+ random chars>   # required in beta/production
 LIFE_INBOX_TIMEZONE=UTC
 LIFE_INBOX_MAX_UPLOAD_MB=5
 LIFE_INBOX_CALENDAR_PROVIDER=mock|google
+# Optional Sign in with Google (button hidden when unset). In beta/production the
+# redirect URI must be https and registered in the Google Cloud OAuth client.
+GOOGLE_CLIENT_ID=<oauth client id>
+GOOGLE_CLIENT_SECRET=<oauth client secret>
+GOOGLE_REDIRECT_URI=https://your-domain/auth/google/callback
+# Real email (password reset codes): LIFE_INBOX_EMAIL_PROVIDER=smtp, then
+LIFE_INBOX_SMTP_HOST=smtp.gmail.com
+LIFE_INBOX_SMTP_PORT=587          # 465 = SSL
+LIFE_INBOX_SMTP_USER=you@gmail.com
+LIFE_INBOX_SMTP_PASSWORD=<gmail app password>
+LIFE_INBOX_SMTP_FROM=you@gmail.com
 LIFE_INBOX_VAPID_PUBLIC_KEY=<URL-safe base64 public key>
 LIFE_INBOX_VAPID_PRIVATE_KEY=<URL-safe base64 private key>
 LIFE_INBOX_VAPID_SUBJECT=mailto:admin@example.com
@@ -70,7 +81,7 @@ On `/login`, **Forgot password?** asks for the email and sends a 6-digit
 code (valid 10 minutes, single use, 5 wrong tries, max 5 codes per hour).
 In local console mode the "email" is printed in the terminal running the
 server — copy the code from there. Beta/production refuse to start with
-`console`; real delivery (Gmail SMTP, then Resend) is the next step.
+`console`; use `LIFE_INBOX_EMAIL_PROVIDER=smtp` (see the variables above) for real delivery.
 
 Operator fallback (no email needed), e.g. for old dev-login accounts:
 

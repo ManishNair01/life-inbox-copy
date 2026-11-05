@@ -20,6 +20,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -93,6 +94,7 @@ class UserRecord(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
+        Index("uq_users_google_sub", "google_sub", unique=True),
         {"sqlite_autoincrement": True},
     )
 
@@ -112,6 +114,7 @@ class UserRecord(Base):
     email_verified_at = Column(Text, nullable=True)
     adult_confirmed_at = Column(Text, nullable=True)
     terms_accepted_at = Column(Text, nullable=True)
+    google_sub = Column(Text, nullable=True)
 
 
 class AuthSessionRecord(Base):
@@ -289,6 +292,8 @@ class TaskRecord(Base):
     due_confidence = Column(Text, nullable=True)
     snoozed_until = Column(Text, nullable=True)
     reminder_at = Column(Text, nullable=True)
+    # Set when the user edits text/priority; re-analysis then leaves them alone.
+    user_edited = Column(Integer, nullable=False, default=0, server_default="0")
     status = Column(Text, nullable=False)
     dedup_key = Column(Text, nullable=False)
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -528,6 +533,72 @@ def create_password_user(
         session.add(user)
         session.flush()
         ensure_default_topics(session, owner_user_id=user.id)
+        session.commit()
+        return _user_to_dict(user)
+
+
+def get_user_credentials_by_google_sub(google_sub: str) -> Optional[dict]:
+    """Includes status/password hash. Never return this dict to a client."""
+    if not google_sub:
+        return None
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.google_sub == google_sub)
+        )
+        return _credentials_to_dict(user) if user else None
+
+
+def create_google_user(
+    *,
+    email: str,
+    display_name: str,
+    google_sub: str,
+    now_iso: str,
+) -> dict:
+    """New account whose only way in is Google (no password hash)."""
+    cleaned = email.strip().lower()
+    with SessionLocal() as session:
+        if session.scalar(
+            select(UserRecord.id).where(UserRecord.email == cleaned)
+        ) is not None:
+            raise EmailAlreadyRegisteredError(cleaned)
+        user = UserRecord(
+            email=cleaned,
+            display_name=display_name.strip() or cleaned.split("@", 1)[0],
+            auth_provider="google",
+            created_at=now_iso,
+            password_hash=None,
+            status="active",
+            failed_password_attempts=0,
+            email_verified_at=now_iso,
+            adult_confirmed_at=now_iso,
+            terms_accepted_at=now_iso,
+            google_sub=google_sub,
+        )
+        session.add(user)
+        session.flush()
+        ensure_default_topics(session, owner_user_id=user.id)
+        session.commit()
+        return _user_to_dict(user)
+
+
+def link_google_to_user(user_id: int, google_sub: str, now_iso: str) -> dict:
+    """Attach a Google identity to an existing account.
+
+    The old password is removed: sign-up never verified the email, so someone
+    could have pre-registered it. Google has now proven who owns the address.
+    """
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise ValueError("User not found")
+        user.google_sub = google_sub
+        user.email_verified_at = user.email_verified_at or now_iso
+        user.password_hash = None
+        user.password_changed_at = now_iso
+        user.failed_password_attempts = 0
+        user.locked_until = None
+        user.auth_provider = "google"
         session.commit()
         return _user_to_dict(user)
 
@@ -1447,8 +1518,9 @@ def complete_analysis_run(
                         )
                     )
             else:
-                task.text = todo["task"]
-                task.priority = todo["priority"]
+                if not task.user_edited:
+                    task.text = todo["task"]
+                    task.priority = todo["priority"]
                 task.ai_timing_text = todo["when"]
                 if not task.timing_confirmed:
                     task.timing_text = todo["when"]
@@ -2165,6 +2237,46 @@ def confirm_task_timing(
         task.due_time = normalize_time_of_day(task.timing_text)
         task.due_confidence = "high" if parsed.due_date else parsed.confidence
         task.timing_confirmed = 1
+        task.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _task_to_dict(session, task)
+
+
+def update_task_in_db(
+    task_id: int,
+    *,
+    text: Optional[str] = None,
+    priority: Optional[str] = None,
+    due_on: Optional[str] = None,
+    clear_due: bool = False,
+) -> Optional[dict]:
+    """Edit a task the user owns. A new date counts as user-confirmed."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None or task.owner_user_id != owner_id:
+            return None
+        if text is not None:
+            cleaned = text.strip()
+            if not cleaned:
+                raise ValueError("Task text cannot be empty.")
+            task.text = cleaned
+            task.user_edited = 1
+        if priority is not None:
+            task.priority = priority
+            task.user_edited = 1
+        if clear_due:
+            task.timing_text = None
+            task.due_on = None
+            task.due_time = None
+            task.due_confidence = None
+            task.timing_confirmed = 0
+        elif due_on is not None:
+            task.timing_text = due_on
+            task.due_on = due_on
+            task.due_time = None
+            task.due_confidence = "high"
+            task.timing_confirmed = 1
         task.updated_at = datetime.now(timezone.utc).isoformat()
         session.commit()
         return _task_to_dict(session, task)

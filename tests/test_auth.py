@@ -185,7 +185,7 @@ def test_register_duplicate_email_is_rejected_case_insensitively(client):
         "/api/auth/register",
         json={
             "email": "DUP@example.com",
-            "password": "another long passphrase",
+            "password": "Another-Long-Pass-7!",
             "confirm_adult": True,
             "accept_terms": True,
         },
@@ -336,7 +336,7 @@ def test_garbage_session_cookie_is_rejected(client):
 def test_change_password_flow(client, app_modules):
     main, _ = app_modules
     register(client, "leo@example.com")
-    new_password = "a brand new passphrase"
+    new_password = "Brand-New-Pass-8!"
 
     wrong = client.post(
         "/api/auth/password/change",
@@ -524,15 +524,15 @@ def test_reset_password_script_sets_password_and_signs_out(client, database):
     login(client, "legacy@example.com")
 
     # A later reset signs out existing sessions and replaces the password.
-    result = reset.reset_password("legacy@example.com", "a different passphrase")
+    result = reset.reset_password("legacy@example.com", "Different-Pass-6!")
     assert result["sessions_signed_out"] == 1
     assert client.get("/api/auth/me").status_code == 401
-    login(client, "legacy@example.com", password="a different passphrase")
+    login(client, "legacy@example.com", password="Different-Pass-6!")
 
 
 # --- forgot password (one-time code) ----------------------------------------
 
-NEW_PASSWORD = "brand new reset passphrase"
+NEW_PASSWORD = "Brand-New-Reset-5!"
 
 
 def outbox():
@@ -613,7 +613,7 @@ def test_forgot_password_full_flow(client, app_modules, database):
     login(client, "reset-me@example.com", password=NEW_PASSWORD)
 
     # A code works only once.
-    again = reset(client, "reset-me@example.com", code, "yet another passphrase")
+    again = reset(client, "reset-me@example.com", code, "Yet-Another-Pass-4!")
     assert again.status_code == 400
 
     with database.engine.connect() as connection:
@@ -754,3 +754,69 @@ def test_console_email_and_local_pepper_rejected_outside_local(monkeypatch):
     assert "LIFE_INBOX_EMAIL_PROVIDER" in str(error.value)
     assert "LIFE_INBOX_OTP_PEPPER" in str(error.value)
     sys.modules.pop("app.config", None)
+
+
+# --- password rules ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "password, fragment",
+    [
+        ("alllowercase-9x!", "upper-case"),
+        ("ALLUPPERCASE-9X!", "lower-case"),
+        ("NoDigits-Here-Abc!", "a number"),
+        ("NoSymbol9Abcdefgh", "symbol"),
+        ("Aaaaa-bbbb-9Xyz", "repeat"),
+        ("Abcd-Horse-95-Z", "sequence"),
+        ("Mylifeinbox-9!Zx", "app name"),
+        ("Bobby-Horse-95-X", "email name"),
+        ("Robert-Horse-95-X", "your name"),
+    ],
+)
+def test_register_enforces_each_password_rule(client, password, fragment):
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": "bobby@example.com",
+            "password": password,
+            "display_name": "Robert Smith",
+            "confirm_adult": True,
+            "accept_terms": True,
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert fragment in response.json()["detail"]
+
+
+def test_password_problem_lists_every_missing_class():
+    from app.auth import password_problem
+
+    message = password_problem("abcdefghijkl")
+    assert "upper-case" in message and "a number" in message and "symbol" in message
+    assert password_problem("Correct-Horse-9-Staple", email="a@b.co") is None
+
+
+def test_change_password_uses_the_same_rules(client):
+    register(client, "changer@example.com")
+    weak = client.post(
+        "/api/auth/password/change",
+        json={
+            "current_password": DEFAULT_TEST_PASSWORD,
+            "new_password": "all lowercase words here",
+        },
+    )
+    assert weak.status_code == 422
+    assert "upper-case" in weak.json()["detail"]
+
+
+def test_existing_weak_password_can_still_sign_in(client, database):
+    """Rules apply when a password is set, never when signing in."""
+    from app.auth import hash_password
+
+    register(client, "oldtimer@example.com")
+    creds = database.get_user_credentials_by_email("oldtimer@example.com")
+    database.set_user_password_hash(
+        creds["id"], hash_password("old weak passphrase"), "2026-01-01T00:00:00+00:00"
+    )
+    client.post("/api/auth/logout")
+    login(client, "oldtimer@example.com", password="old weak passphrase")

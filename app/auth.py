@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -26,11 +28,14 @@ from app.database import (
     consume_otp_challenge,
     create_otp_challenge,
     create_auth_session,
+    create_google_user,
     create_password_user,
     get_auth_session_by_token_hash,
     get_user_by_id,
     get_user_credentials_by_email,
+    get_user_credentials_by_google_sub,
     get_user_credentials_by_id,
+    link_google_to_user,
     list_recent_otp_challenges,
     record_login_success,
     record_otp_failure,
@@ -43,6 +48,8 @@ from app.database import (
 from app.email_sender import current_provider as current_email_provider
 from app.email_sender import send_email
 
+
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "life_inbox_session"
 SESSION_IDLE_TTL = timedelta(days=30)
@@ -135,8 +142,31 @@ def normalize_email(email: str) -> str:
     return cleaned
 
 
-def password_problem(password: str, *, email: str = "") -> Optional[str]:
-    """Return a user-facing reason the password is unacceptable, or None."""
+_SYMBOL = re.compile(r"[^A-Za-z0-9]")
+_REPEAT = re.compile(r"(.)\1{3,}")
+
+
+def _has_sequence(value: str, length: int = 4) -> bool:
+    """True for a run like 1234, 9876, abcd or dcba (case-insensitive)."""
+    lowered = value.lower()
+    for start in range(len(lowered) - length + 1):
+        chunk = lowered[start : start + length]
+        if not (chunk.isalpha() or chunk.isdigit()):
+            continue
+        steps = {ord(b) - ord(a) for a, b in zip(chunk, chunk[1:])}
+        if steps in ({1}, {-1}):
+            return True
+    return False
+
+
+def password_problem(
+    password: str, *, email: str = "", display_name: str = ""
+) -> Optional[str]:
+    """Return a user-facing reason the password is unacceptable, or None.
+
+    Rules apply only when a password is *set* (register, reset, change);
+    existing passwords are never re-checked at sign-in.
+    """
     if len(password) < PASSWORD_MIN_LENGTH:
         return f"Password must be at least {PASSWORD_MIN_LENGTH} characters."
     if len(password) > PASSWORD_MAX_LENGTH:
@@ -146,10 +176,33 @@ def password_problem(password: str, *, email: str = "") -> Optional[str]:
     lowered = password.lower()
     if lowered in COMMON_PASSWORDS or len(set(password)) < 4:
         return "This password is too common. Choose something harder to guess."
-    if email:
-        local = email.split("@", 1)[0]
-        if lowered == email or (len(local) >= 4 and lowered == local):
-            return "Password must not be your email address."
+    local = email.split("@", 1)[0].lower() if email else ""
+    if email and (lowered == email.lower() or (len(local) >= 4 and lowered == local)):
+        return "Password must not be your email address."
+
+    missing = []
+    if not any(ch.isupper() for ch in password):
+        missing.append("an upper-case letter")
+    if not any(ch.islower() for ch in password):
+        missing.append("a lower-case letter")
+    if not any(ch.isdigit() for ch in password):
+        missing.append("a number")
+    if not _SYMBOL.search(password):
+        missing.append("a symbol (like ! or -)")
+    if missing:
+        return "Password needs " + ", ".join(missing) + "."
+
+    if _REPEAT.search(password):
+        return "Password must not repeat the same character 4 or more times in a row."
+    if _has_sequence(password):
+        return "Password must not contain an easy sequence like 1234 or abcd."
+    if "lifeinbox" in lowered:
+        return "Password must not contain the app name."
+    if len(local) >= 4 and local in lowered:
+        return "Password must not contain your email name."
+    for word in re.split(r"\s+", (display_name or "").lower()):
+        if len(word) >= 4 and word in lowered:
+            return "Password must not contain your name."
     return None
 
 
@@ -182,7 +235,9 @@ def register_user(
         raise AuthError(422, "You must confirm you are 18 or older.")
     if not accept_terms:
         raise AuthError(422, "You must accept the Terms and Privacy Policy.")
-    problem = password_problem(password, email=cleaned)
+    problem = password_problem(
+        password, email=cleaned, display_name=display_name
+    )
     if problem:
         raise AuthError(422, problem)
     try:
@@ -249,7 +304,11 @@ def change_password(
     creds = get_user_credentials_by_id(user_id)
     if creds is None or not _verify_password(creds["password_hash"], current_password):
         raise AuthError(403, "Current password is incorrect.")
-    problem = password_problem(new_password, email=creds["email"] or "")
+    problem = password_problem(
+        new_password,
+        email=creds["email"] or "",
+        display_name=creds.get("display_name") or "",
+    )
     if problem:
         raise AuthError(422, problem)
     if _verify_password(creds["password_hash"], new_password):
@@ -262,6 +321,71 @@ def change_password(
         reason="password_changed",
         keep_token_hash=hash_token(keep_token) if keep_token else None,
     )
+
+
+# --- sign in with Google ----------------------------------------------------
+
+
+class GoogleSignInError(Exception):
+    """Failure with a fixed code the login page turns into a message."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def sign_in_with_google(
+    *,
+    sub: str,
+    email: str,
+    display_name: str,
+    intent: str,
+    adult: bool,
+    terms: bool,
+) -> tuple[dict, str]:
+    """Resolve a verified Google identity to a Life Inbox user.
+
+    Returns (public user, outcome) where outcome is "existing", "linked" or
+    "created". Linking an existing password account removes its password and
+    signs out its other sessions, because sign-up does not verify email.
+    """
+    now_iso = _iso(_now())
+
+    by_sub = get_user_credentials_by_google_sub(sub)
+    if by_sub is not None:
+        if by_sub["status"] != "active":
+            raise GoogleSignInError("google_failed")
+        record_login_success(by_sub["id"], now_iso)
+        return {key: by_sub[key] for key in PUBLIC_USER_FIELDS}, "existing"
+
+    try:
+        cleaned = normalize_email(email)
+    except AuthError:
+        raise GoogleSignInError("google_failed")
+
+    by_email = get_user_credentials_by_email(cleaned)
+    if by_email is not None:
+        if by_email["status"] != "active":
+            raise GoogleSignInError("google_failed")
+        link_google_to_user(by_email["id"], sub, now_iso)
+        revoke_user_auth_sessions(
+            by_email["id"], now_iso=now_iso, reason="google_linked"
+        )
+        record_login_success(by_email["id"], now_iso)
+        return get_user_by_id(by_email["id"]), "linked"
+
+    if intent != "register":
+        raise GoogleSignInError("google_no_account")
+    if not (adult and terms):
+        raise GoogleSignInError("google_consent")
+    user = create_google_user(
+        email=cleaned,
+        display_name=(display_name or "").strip()[:100],
+        google_sub=sub,
+        now_iso=now_iso,
+    )
+    record_login_success(user["id"], now_iso)
+    return user, "created"
 
 
 # --- forgot password (one-time code) ----------------------------------------
@@ -329,14 +453,19 @@ def request_password_reset(email: str) -> dict:
     )
     if code:
         minutes = int(OTP_TTL.total_seconds() // 60)
-        send_email(
-            cleaned,
-            "Your Life Inbox password reset code",
-            f"Your Life Inbox code is {code}.\n\n"
-            f"It expires in {minutes} minutes and can be used once.\n"
-            "If you didn't ask to reset your password, ignore this email; "
-            "your password has not changed.",
-        )
+        try:
+            send_email(
+                cleaned,
+                "Your Life Inbox password reset code",
+                f"Your Life Inbox code is {code}.\n\n"
+                f"It expires in {minutes} minutes and can be used once.\n"
+                "If you didn't ask to reset your password, ignore this email; "
+                "your password has not changed.",
+            )
+        except Exception:
+            # Same response whether or not the account exists (and whether or
+            # not mail works), so delivery problems must not leak as a 500.
+            logger.exception("Could not send the password reset email")
     return {
         "resend_after_seconds": int(OTP_RESEND_COOLDOWN.total_seconds()),
         "delivery": current_email_provider(),

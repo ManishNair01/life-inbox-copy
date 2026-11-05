@@ -17,9 +17,10 @@ class ConfigError(RuntimeError):
     pass
 
 
-EMAIL_PROVIDERS = frozenset({"console", "fake"})
+EMAIL_PROVIDERS = frozenset({"console", "fake", "smtp"})
 DEV_ONLY_EMAIL_PROVIDERS = frozenset({"console", "fake"})
 LOCAL_OTP_PEPPER = "local-only-otp-pepper-do-not-use-in-beta"
+DEFAULT_GOOGLE_REDIRECT_URI = "http://127.0.0.1:8000/auth/google/callback"
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,13 @@ class AppConfig:
     nvidia_base_url: str
     nvidia_llm_model: str
     nvidia_asr_model: str
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = DEFAULT_GOOGLE_REDIRECT_URI
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
 
     @property
     def is_sqlite(self) -> bool:
@@ -77,6 +85,13 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
         or "openai/whisper-large-v3"
     )
 
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    google_redirect_uri = (
+        os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+        or DEFAULT_GOOGLE_REDIRECT_URI
+    )
+
     if strict is None:
         strict = environment in {"beta", "production"}
 
@@ -111,6 +126,28 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
                 "in beta/production."
             )
 
+    if (
+        environment in {"beta", "production"}
+        and google_client_id
+        and google_client_secret
+        and not google_redirect_uri.startswith("https://")
+    ):
+        errors.append(
+            "GOOGLE_REDIRECT_URI must be an https:// URL in beta/production."
+        )
+
+    if email_provider == "smtp" and (
+        not os.getenv("LIFE_INBOX_SMTP_HOST", "").strip()
+        or not (
+            os.getenv("LIFE_INBOX_SMTP_FROM", "").strip()
+            or os.getenv("LIFE_INBOX_SMTP_USER", "").strip()
+        )
+    ):
+        errors.append(
+            "LIFE_INBOX_EMAIL_PROVIDER=smtp needs LIFE_INBOX_SMTP_HOST and "
+            "LIFE_INBOX_SMTP_FROM (or LIFE_INBOX_SMTP_USER)."
+        )
+
     if errors and strict:
         raise ConfigError("; ".join(errors))
 
@@ -131,6 +168,9 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
         nvidia_base_url=nvidia_base_url,
         nvidia_llm_model=nvidia_llm_model,
         nvidia_asr_model=nvidia_asr_model,
+        google_client_id=google_client_id,
+        google_client_secret=google_client_secret,
+        google_redirect_uri=google_redirect_uri,
     )
 
 

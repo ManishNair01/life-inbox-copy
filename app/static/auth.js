@@ -1,8 +1,6 @@
 // Login / registration page. Runs only on /login; the app itself never loads
 // until the server sees a valid session.
 
-const MIN_PASSWORD_LENGTH = 10;
-
 function $(id) {
   return document.getElementById(id);
 }
@@ -28,6 +26,57 @@ const CARD_COPY = {
   }
 };
 
+const GOOGLE_ERRORS = {
+  google_denied: 'Google sign-in was cancelled.',
+  google_state: 'That Google sign-in expired or was interrupted. Please try again.',
+  google_failed: 'Google sign-in did not work. Please try again.',
+  google_unverified: 'Google says that email address is not verified, so we cannot use it.',
+  google_no_account: 'No Life Inbox account uses that Google email yet. Create one here, tick both boxes, then continue with Google.',
+  google_consent: 'Tick both boxes (18+ and Terms) before continuing with Google.'
+};
+
+let googleEnabled = false;
+
+function updateGoogleBlock() {
+  const registering = !$('registerForm').hidden;
+  $('googleBlock').hidden = !googleEnabled || !$('forgotPanel').hidden;
+  $('googleButtonLabel').textContent = registering
+    ? 'Sign up with Google'
+    : 'Continue with Google';
+}
+
+function startGoogle() {
+  const registering = !$('registerForm').hidden;
+  if (registering && !($('registerAdult').checked && $('registerTerms').checked)) {
+    showMessage(GOOGLE_ERRORS.google_consent);
+    return;
+  }
+  const params = new URLSearchParams({intent: registering ? 'register' : 'signin'});
+  if (registering) {
+    params.set('adult', '1');
+    params.set('terms', '1');
+  }
+  window.location.assign(`/api/auth/google/start?${params.toString()}`);
+}
+
+async function initGoogle() {
+  try {
+    const response = await fetch('/api/auth/providers', {credentials: 'same-origin'});
+    googleEnabled = response.ok && Boolean((await response.json()).google);
+  } catch {
+    googleEnabled = false;
+  }
+  updateGoogleBlock();
+}
+
+function showReturnedError() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('error');
+  if (params.get('tab') === 'register') selectTab('register');
+  if (code && GOOGLE_ERRORS[code]) showMessage(GOOGLE_ERRORS[code]);
+  if (code) window.history.replaceState({}, '', '/login');
+}
+
 function setCardCopy(view) {
   // Static strings only; no user input is ever inserted as HTML.
   $('cardTitle').innerHTML = CARD_COPY[view].title;
@@ -46,6 +95,7 @@ function selectTab(name) {
   $('tabSignIn').setAttribute('aria-selected', String(signIn));
   $('tabRegister').setAttribute('aria-selected', String(!signIn));
   showMessage('', false);
+  updateGoogleBlock();
   (signIn ? $('signInEmail') : $('registerName')).focus();
 }
 
@@ -119,8 +169,8 @@ async function handleRegister(event) {
     showMessage('Enter your email address.');
     return;
   }
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    showMessage(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  if (!PasswordRules.allPass(password)) {
+    showMessage(PasswordRules.unmetSummary(password));
     return;
   }
   if (password !== confirm) {
@@ -163,6 +213,7 @@ function showForgotPanel() {
   document.querySelector('.tabs').hidden = true;
   setCardCopy('forgot');
   $('forgotPanel').hidden = false;
+  updateGoogleBlock();
   $('forgotRequestForm').hidden = false;
   $('forgotResetForm').hidden = true;
   $('forgotEmail').value = $('signInEmail').value.trim();
@@ -239,8 +290,8 @@ async function handleForgotReset(event) {
     showMessage('Enter the 6-digit code.');
     return;
   }
-  if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    showMessage(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  if (!PasswordRules.allPass(newPassword)) {
+    showMessage(PasswordRules.unmetSummary(newPassword));
     return;
   }
   if (newPassword !== $('forgotNewPasswordConfirm').value) {
@@ -309,5 +360,14 @@ $('forgotBackButton').addEventListener('click', () => selectTab('signIn'));
 document.querySelectorAll('.toggle-password').forEach((button) => {
   button.addEventListener('click', togglePassword);
 });
+PasswordRules.attach(
+  $('registerPassword'), $('registerRules'), $('registerPasswordConfirm'), $('registerMatch')
+);
+PasswordRules.attach(
+  $('forgotNewPassword'), $('forgotRules'), $('forgotNewPasswordConfirm'), $('forgotMatch')
+);
+$('googleButton').addEventListener('click', startGoogle);
+initGoogle();
 startAffirmations();
 $('signInEmail').focus();
+showReturnedError();

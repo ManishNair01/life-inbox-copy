@@ -4,13 +4,20 @@ Providers (``LIFE_INBOX_EMAIL_PROVIDER``):
 - ``console``: prints the email in the server terminal. Local development only.
 - ``fake``: keeps emails in ``FAKE_OUTBOX`` for automated tests.
 
-Real delivery (Gmail SMTP, then Resend once there's a domain) plugs in here
-without changing callers.
+- ``smtp``: real delivery over SMTP (Gmail with an app password, or any
+  provider). Configure ``LIFE_INBOX_SMTP_HOST``, ``..._PORT`` (587 STARTTLS
+  by default; 465 uses SSL), ``..._USER``, ``..._PASSWORD`` and ``..._FROM``.
+
+Another provider (e.g. Resend) plugs in the same way without changing callers.
 """
 
 from __future__ import annotations
 
+import os
+import smtplib
+import ssl
 from dataclasses import dataclass
+from email.message import EmailMessage
 
 from app.config import load_config
 
@@ -42,9 +49,39 @@ def _send_fake(message: OutgoingEmail) -> None:
     FAKE_OUTBOX.append(message)
 
 
+def _send_smtp(message: OutgoingEmail) -> None:
+    host = os.getenv("LIFE_INBOX_SMTP_HOST", "").strip()
+    port = int(os.getenv("LIFE_INBOX_SMTP_PORT", "587") or "587")
+    user = os.getenv("LIFE_INBOX_SMTP_USER", "").strip()
+    password = os.getenv("LIFE_INBOX_SMTP_PASSWORD", "")
+    sender = os.getenv("LIFE_INBOX_SMTP_FROM", "").strip() or user
+    if not host or not sender:
+        raise RuntimeError("SMTP is not configured (host and from address needed).")
+
+    email = EmailMessage()
+    email["From"] = sender
+    email["To"] = message.to
+    email["Subject"] = message.subject
+    email.set_content(message.body)
+
+    context = ssl.create_default_context()
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=15, context=context) as server:
+            if user:
+                server.login(user, password)
+            server.send_message(email)
+        return
+    with smtplib.SMTP(host, port, timeout=15) as server:
+        server.starttls(context=context)
+        if user:
+            server.login(user, password)
+        server.send_message(email)
+
+
 _PROVIDERS = {
     "console": _send_console,
     "fake": _send_fake,
+    "smtp": _send_smtp,
 }
 
 

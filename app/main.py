@@ -22,14 +22,17 @@ from app.auth import (
     change_password,
     clear_session_cookie,
     end_all_sessions,
+    GoogleSignInError,
     end_session,
     register_user,
     request_password_reset,
     reset_password_with_code,
     resolve_session,
     set_session_cookie,
+    sign_in_with_google,
     start_session,
 )
+from app import google_auth
 
 from app.capture.image_extract import process_image_bytes, validate_image_upload
 from app.capture.pdf_extract import extract_pdf_text, validate_pdf_upload
@@ -95,6 +98,7 @@ from app.database import (
     update_item_extracted_text,
     update_item_in_db,
     update_item_insight_overrides,
+    update_task_in_db,
     update_note_in_db,
     update_topic_in_db,
 )
@@ -141,6 +145,7 @@ from app.schemas import (
     TaskReminderRequest,
     TaskSnoozeRequest,
     TaskTimingConfirm,
+    TaskUpdate,
     Topic,
     TopicCreate,
     TopicUpdate,
@@ -218,6 +223,9 @@ PUBLIC_PATHS = frozenset(
         "/api/auth/logout",
         "/api/auth/password/forgot",
         "/api/auth/password/reset",
+        "/api/auth/providers",
+        "/api/auth/google/start",
+        "/auth/google/callback",
         "/service-worker.js",
     }
 )
@@ -372,6 +380,103 @@ def auth_login(payload: LoginRequest, request: Request, response: Response):
     user = authenticate_password(payload.email, payload.password)
     _start_fresh_session(request, response, user)
     return user
+
+
+@app.get("/api/auth/providers")
+def auth_providers():
+    from app.config import load_config
+
+    return {"google": load_config(strict=False).google_enabled}
+
+
+def _login_redirect(error: str, intent: str = "signin") -> RedirectResponse:
+    tab = "&tab=register" if intent == "register" else ""
+    response = RedirectResponse(f"/login?error={error}{tab}", status_code=302)
+    response.delete_cookie(google_auth.STATE_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/auth/google/start")
+def google_start(
+    intent: str = Query("signin", pattern="^(signin|register)$"),
+    adult: bool = Query(False),
+    terms: bool = Query(False),
+):
+    from app.auth import _secure_cookies
+    from app.config import load_config
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(status_code=404, detail="Google sign-in is not configured.")
+    if intent == "register" and not (adult and terms):
+        return _login_redirect("google_consent", intent)
+    cookie, url = google_auth.begin(
+        config, intent=intent, adult=adult, terms=terms
+    )
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        key=google_auth.STATE_COOKIE,
+        value=cookie,
+        max_age=google_auth.STATE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=_secure_cookies(),
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/google/callback")
+def google_callback(
+    request: Request,
+    code: Optional[str] = Query(None, max_length=2048),
+    state: Optional[str] = Query(None, max_length=512),
+    error: Optional[str] = Query(None, max_length=200),
+):
+    import hmac
+
+    from app.config import load_config
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(status_code=404, detail="Google sign-in is not configured.")
+
+    flow = google_auth.unpack_state(request.cookies.get(google_auth.STATE_COOKIE))
+    intent = flow.get("intent", "signin") if flow else "signin"
+    if error:
+        return _login_redirect("google_denied", intent)
+    if (
+        flow is None
+        or not code
+        or not state
+        or not hmac.compare_digest(str(flow.get("state", "")), state)
+    ):
+        return _login_redirect("google_state", intent)
+
+    try:
+        identity = google_auth.exchange_code(
+            config,
+            code=code,
+            verifier=str(flow.get("verifier", "")),
+            nonce=str(flow.get("nonce", "")),
+        )
+        user, outcome = sign_in_with_google(
+            sub=identity["sub"],
+            email=identity["email"],
+            display_name=identity["name"],
+            intent=intent,
+            adult=bool(flow.get("adult")),
+            terms=bool(flow.get("terms")),
+        )
+    except (google_auth.GoogleAuthError, GoogleSignInError) as exc:
+        return _login_redirect(exc.code, intent)
+
+    response = RedirectResponse(
+        "/?google=linked" if outcome == "linked" else "/", status_code=302
+    )
+    response.delete_cookie(google_auth.STATE_COOKIE, path="/")
+    _start_fresh_session(request, response, user)
+    return response
 
 
 @app.get("/api/auth/me", response_model=AuthUser)
@@ -1108,6 +1213,29 @@ def create_task(payload: TaskCreate):
             detail="Unable to create task. Please try again.",
         ) from exc
 
+
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+def patch_task(task_id: int, payload: TaskUpdate):
+    try:
+        task = update_task_in_db(
+            task_id,
+            text=payload.text,
+            priority=payload.priority,
+            due_on=payload.due_on.isoformat() if payload.due_on else None,
+            clear_due=payload.clear_due_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to update task")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to update task. Please try again.",
+        ) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    return task
 
 
 def _transition_task(task_id: int, task_status: str):
