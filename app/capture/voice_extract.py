@@ -256,19 +256,19 @@ def transcribe_audio(
             "note": "Transcription disabled via LIFE_INBOX_DISABLE_TRANSCRIPTION.",
         }
 
-    api_key = (
-        os.getenv("NVIDIA_API_KEY", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
-    )
-    if api_key and not api_key.startswith("nvapi-") and not api_key.startswith("Bearer "):
-        api_key = f"nvapi-{api_key}"
+    nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
+    # Only a NVIDIA key gets the `nvapi-` prefix; a key from another provider
+    # (e.g. OPENAI_API_KEY) must be passed through untouched.
+    if (
+        nvidia_key
+        and not nvidia_key.startswith("nvapi-")
+        and not nvidia_key.startswith("Bearer ")
+    ):
+        nvidia_key = f"nvapi-{nvidia_key}"
+    api_key = nvidia_key or os.getenv("OPENAI_API_KEY", "").strip()
 
     if not api_key:
-        key_name = (
-            "NVIDIA_API_KEY"
-            if not os.getenv("OPENAI_API_KEY")
-            else "OPENAI_API_KEY"
-        )
+        key_name = "NVIDIA_API_KEY"
         return {
             "text": candidate_transcript or "",
             "cleaned_text": candidate_transcript or "",

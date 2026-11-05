@@ -213,7 +213,8 @@ class GoogleCalendarPreviewAdapter(CalendarAdapter):
 
 
 _ADAPTER: Optional[CalendarAdapter] = None
-_DRAFTS: dict[str, CalendarEventDraft] = {}
+# draft_id -> (owner_user_id, draft). Drafts are only visible to their owner.
+_DRAFTS: dict[str, tuple[int, CalendarEventDraft]] = {}
 
 
 def get_calendar_adapter() -> CalendarAdapter:
@@ -233,10 +234,17 @@ def reset_calendar_adapter_for_tests() -> None:
     _DRAFTS = {}
 
 
-def store_draft(draft: CalendarEventDraft) -> CalendarEventDraft:
-    _DRAFTS[draft.draft_id] = draft
+def store_draft(
+    draft: CalendarEventDraft, *, owner_user_id: int
+) -> CalendarEventDraft:
+    _DRAFTS[draft.draft_id] = (owner_user_id, draft)
     return draft
 
 
-def get_draft(draft_id: str) -> Optional[CalendarEventDraft]:
-    return _DRAFTS.get(draft_id)
+def get_draft(
+    draft_id: str, *, owner_user_id: int
+) -> Optional[CalendarEventDraft]:
+    entry = _DRAFTS.get(draft_id)
+    if entry is None or entry[0] != owner_user_id:
+        return None
+    return entry[1]

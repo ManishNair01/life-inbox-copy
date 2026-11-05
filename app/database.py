@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 import uuid
@@ -1486,13 +1486,25 @@ def complete_analysis_run(
                 session.delete(existing)
 
         # Refresh deterministic relations for current inbox text.
+        # Only this owner's items/relations: never read or delete another
+        # user's data while refreshing relations.
         items = [
             _item_to_dict(item)
-            for item in session.scalars(select(InboxItemRecord)).all()
+            for item in session.scalars(
+                select(InboxItemRecord).where(
+                    InboxItemRecord.owner_user_id == owner_id
+                )
+            ).all()
         ]
-        for relation in session.scalars(select(ItemRelationRecord)).all():
-            if not relation.dismissed:
-                session.delete(relation)
+        owner_item_ids = [item["id"] for item in items]
+        if owner_item_ids:
+            for relation in session.scalars(
+                select(ItemRelationRecord).where(
+                    ItemRelationRecord.item_id_a.in_(owner_item_ids)
+                )
+            ).all():
+                if not relation.dismissed:
+                    session.delete(relation)
         session.flush()
         for relation in find_item_relations(items):
             existing = session.scalars(
@@ -1523,7 +1535,10 @@ def complete_analysis_run(
             session.scalars(
                 select(TaskSourceItemRecord.item_id)
                 .join(TaskRecord)
-                .where(TaskRecord.status == TASK_COMPLETED)
+                .where(
+                    TaskRecord.status == TASK_COMPLETED,
+                    TaskRecord.owner_user_id == owner_id,
+                )
             ).all()
         )
         persisted = result
@@ -1631,6 +1646,25 @@ def get_latest_successful_analysis() -> Optional[dict]:
                 )
             ).all()
         )
+        # The stored JSON is a snapshot; hide notes that were deleted since,
+        # exactly like completed ones.
+        existing_item_ids = set(
+            session.scalars(
+                select(InboxItemRecord.id).where(
+                    InboxItemRecord.owner_user_id == owner_id
+                )
+            ).all()
+        )
+        snapshot_ids = {
+            n.get("id")
+            for b in stored.get("buckets", [])
+            for n in b.get("notes", [])
+        } | {
+            i
+            for t in stored.get("todos", [])
+            for i in t.get("source_note_ids", [])
+        }
+        completed_item_ids |= snapshot_ids - existing_item_ids
         if completed_item_ids:
             filtered_buckets = []
             for b in stored.get("buckets", []):
@@ -2608,11 +2642,24 @@ def list_topics_from_db(include_archived: bool = False) -> list[dict]:
             statement = statement.where(TopicRecord.archived == 0)
         topics = session.scalars(statement).all()
         counts = {}
+        # Completed notes leave the active views, so they don't count here.
+        done_item_ids = set(
+            session.scalars(
+                select(TaskSourceItemRecord.item_id)
+                .join(TaskRecord)
+                .where(
+                    TaskRecord.status == TASK_COMPLETED,
+                    TaskRecord.owner_user_id == owner_id,
+                )
+            ).all()
+        )
         for insight in session.scalars(
             select(ItemInsightRecord)
             .join(InboxItemRecord, ItemInsightRecord.item_id == InboxItemRecord.id)
             .where(InboxItemRecord.owner_user_id == owner_id)
         ).all():
+            if insight.item_id in done_item_ids:
+                continue
             effective_topic = (
                 insight.user_topic_id
                 if insight.user_topic_id is not None
@@ -2826,9 +2873,13 @@ def list_relations_from_db(
 
 
 def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         row = session.get(ItemRelationRecord, relation_id)
         if row is None:
+            return None
+        anchor = session.get(InboxItemRecord, row.item_id_a)
+        if anchor is None or anchor.owner_user_id != owner_id:
             return None
         row.dismissed = 1
         session.commit()

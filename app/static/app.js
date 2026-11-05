@@ -1050,7 +1050,7 @@ function renderNote(note) {
       setTimeout(() => root.remove(), 300);
       setStatus('noteStatus', 'Note completed and removed from active inbox.');
       await loadTasks();
-      await loadDashboard();
+      await refreshAnalysisViews();
       await loadAttention();
       await loadCalendarEvents();
     } catch {
@@ -1217,7 +1217,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
     LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
-    await loadLatestAnalysis();
+    await refreshAnalysisViews();
     await loadTasks();
     await loadAttention();
     await loadCalendarEvents();
@@ -1385,7 +1385,7 @@ async function transitionTask(taskId, action, actions) {
     setStatus('inAppCalendarStatus', messages[action]);
     await loadTasks();
     await loadAttention();
-    await loadDashboard();
+    await refreshAnalysisViews();
     await loadCalendarEvents();
   } catch {
     setStatus(
@@ -1428,6 +1428,7 @@ async function createQuickTask(event) {
   submitButton.textContent = 'Adding…';
 
   try {
+    const dueOn = dueInput.value || null;
     await fetchJson(
       '/api/tasks',
       {
@@ -1436,7 +1437,7 @@ async function createQuickTask(event) {
         body: JSON.stringify({
           text,
           priority: priorityInput.value,
-          due_on: dueInput.value || null
+          due_on: dueOn
         })
       },
       'Unable to create task.'
@@ -1445,9 +1446,18 @@ async function createQuickTask(event) {
     form.reset();
     priorityInput.value = 'Medium';
 
+    if (dueOn) {
+      // Show the month (and day) the new task landed on so it is visible.
+      const due = parseCalendarIsoDate(dueOn);
+      calendarViewYear = due.getFullYear();
+      calendarViewMonth = due.getMonth();
+      calendarSelectedDateStr = dueOn;
+    }
+
     await loadTasks();
     await loadAttention();
     await loadDashboard();
+    await loadCalendarEvents();
 
     setStatus('taskStatus', 'Task added successfully.');
     textInput.focus();
@@ -1578,6 +1588,14 @@ async function loadLatestAnalysis() {
       true
     );
   }
+}
+
+// Re-render everything derived from analysis (AI-organized inbox, topic
+// counts, dashboard) after a note is deleted or completed.
+async function refreshAnalysisViews() {
+  await loadLatestAnalysis();
+  await loadTopics();
+  await loadDashboard();
 }
 
 async function analyzeInbox(itemId = null) {
@@ -2054,9 +2072,16 @@ async function previewCalendarForTask(task) {
       }
     });
     root.appendChild(confirmBtn);
-    setStatus('calendarStatus', 'Preview ready — confirm explicitly to record a mock receipt.');
+    const readyMessage = 'Preview ready — confirm explicitly to record a mock receipt.';
+    setStatus('calendarStatus', readyMessage);
+    // The preview panel lives in the Calendar zone, away from the Tasks list
+    // where the button is, so report here too and bring the panel into view.
+    setStatus('taskStatus', `${readyMessage} Shown in the Calendar section.`);
+    root.scrollIntoView({behavior: 'smooth', block: 'center'});
   } catch (error) {
-    setStatus('calendarStatus', error.message || 'Calendar preview failed.', true);
+    const message = error.message || 'Calendar preview failed.';
+    setStatus('calendarStatus', message, true);
+    setStatus('taskStatus', message, true);
   }
 }
 

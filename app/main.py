@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -79,6 +80,7 @@ from app.database import (
     get_notification_settings,
     list_notes_from_db,
     list_relations_from_db,
+    require_owner_id,
     list_tasks_from_db,
     list_topics_from_db,
     mark_item_processing,
@@ -188,7 +190,9 @@ def _check_startup_health():
                     head_rev,
                 )
     except Exception as e:
-        logger.debug("Startup migration check skipped: %s", e)
+        # Was debug-level, which hid a NameError (missing `os` import) for a
+        # long time. Keep it non-fatal but visible.
+        logger.warning("Startup migration check skipped: %s", e)
 
 
 @asynccontextmanager
@@ -1399,7 +1403,7 @@ def calendar_preview(payload: CalendarPreviewRequest):
         description=payload.description or "",
         timezone_name=str(configured_timezone()),
     )
-    store_draft(draft)
+    store_draft(draft, owner_user_id=require_owner_id())
     return {
         "draft_id": draft.draft_id,
         "task_id": draft.task_id,
@@ -1417,7 +1421,8 @@ def calendar_preview(payload: CalendarPreviewRequest):
 
 @app.post("/api/calendar/confirm")
 def calendar_confirm(payload: CalendarConfirmRequest):
-    draft = get_draft(payload.draft_id)
+    owner_id = require_owner_id()
+    draft = get_draft(payload.draft_id, owner_user_id=owner_id)
     if draft is None:
         raise HTTPException(
             status_code=404,
@@ -1435,7 +1440,7 @@ def calendar_confirm(payload: CalendarConfirmRequest):
             detail="Unable to confirm calendar action.",
         ) from exc
 
-    store_draft(confirmed)
+    store_draft(confirmed, owner_user_id=owner_id)
     receipt = save_calendar_receipt(
         draft_id=confirmed.draft_id,
         task_id=confirmed.task_id,

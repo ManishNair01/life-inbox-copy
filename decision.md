@@ -611,3 +611,53 @@ Running log of architectural, code, and operational decisions.
   3. Cleaned up the existing leftover duplicate task in `data/life_inbox.db`.
   4. Added test `test_editing_note_updates_task_without_duplication` in `tests/test_api.py`.
 - **Verification**: Full pytest suite green (`186 passed`). Confirmed in the database that exactly 1 updated task remains for the note.
+
+## 2026-11-05 — Codebase review follow-up: fixes for 4 issues (startup check, relation isolation, key prefix, calendar drafts)
+
+- **What was asked**: After a full read-through of the repo, the owner approved fixing four issues found in review. The owner also stated they will use only an NVIDIA NIM key and not an OpenAI key.
+- **Fix 1 — silent startup migration check** (`app/main.py`): `_check_startup_health()` called `os.getenv` but `os` was never imported. The resulting `NameError` was swallowed by `except Exception` and logged at debug level, so the "migrations pending" warning could never appear. Added `import os` and raised the skip message to `warning` so a failing check is visible (still non-fatal).
+- **Fix 2 — cross-user leakage in analysis** (`app/database.py`): the relation refresh in `complete_analysis_run` read every user's items and deleted every user's non-dismissed relations, and `completed_item_ids` was not owner-filtered. Now both are scoped to the current owner. Same class of bug found while fixing: `dismiss_relation_in_db` had no ownership check, so any signed-in user could dismiss another user's relation by id; it now returns None (404) unless the relation's anchor item belongs to the caller.
+- **Fix 3 — `nvapi-` prefix on any key** (`app/capture/voice_extract.py`): the prefix was added to whatever key was found, including `OPENAI_API_KEY`. It is now applied only to `NVIDIA_API_KEY`; a key from any other source is passed through untouched. `config.py` already only prefixed `NVIDIA_API_KEY`. The "not configured" message now always names `NVIDIA_API_KEY`.
+- **Fix 4 — calendar drafts not owner-scoped** (`app/integrations/calendar.py`, `app/main.py`): drafts lived in a process-global dict keyed by random id, so another signed-in user holding a draft id could confirm it. `store_draft`/`get_draft` now take a required `owner_user_id` and `get_draft` returns None for other owners; the preview/confirm routes pass `require_owner_id()`. Signature change is keyword-only and only used in `main.py`.
+- **Extra fix found while verifying** (`app/database.py`): `claim_notification_delivery` used `timedelta` but only `datetime, timezone` were imported, so a retry of an already-claimed delivery key would raise `NameError`. Added the import.
+- **Deliberately not changed**: the `OPENAI_API_KEY` fallbacks in `organizer.py`, `ask.py`, `seed_demo_notes.py` and `image_extract.py` remain; existing tests set `OPENAI_API_KEY` to switch the LLM paths on with mocks, so removing them is a separate, wider change. Fixes 5-7 from the review (TF-IDF rebuilt per query, stale docs, local DB/.env hygiene) were not part of this request.
+- **Tests added**: `tests/test_isolation_regressions.py` (4 tests: startup check logs no skip, draft confirm by another user returns 404, another user's analysis keeps my relations and cannot dismiss them, `nvapi-` prefix only on the NVIDIA key). Confirmed all 4 fail on the previous code and pass now.
+- **Verification**: full suite `185 passed, 5 failed`. The 5 failures are all in `tests/test_calendar.py` and are pre-existing (identical on a clean stash): they hard-code dates like "3 Nov" without a year, and with today at 2026-11-05 the parser rolls them to 2027. Not caused by these changes and left untouched; they need date-relative test data.
+- **Files affected**: `app/main.py`, `app/database.py`, `app/integrations/calendar.py`, `app/capture/voice_extract.py`, `tests/test_isolation_regressions.py` (new), `decision.md`.
+
+## 2026-11-05 — Analysis lingering after delete/complete; "Preview calendar" appeared dead
+
+- **What was asked**: (1) Deleted or completed notes were still showing their analysis (High priority / AI-organized inbox / Topics counts on the dashboard). (2) The "Preview calendar" button on a task did nothing visible.
+- **Root causes (analysis)**:
+  1. `get_latest_successful_analysis` filtered the stored run snapshot only for *completed* notes; *deleted* notes stayed in the snapshot JSON (buckets, priority view, todos), so the AI-organized inbox and dashboard analysis kept showing them.
+  2. `list_topics_from_db` counted every insight row, including completed notes, so topic counts (e.g. Health 1 / Personal 1) never dropped.
+  3. The UI did not refresh the analysis panel / topics / dashboard after a delete (only analysis+tasks), after a note "Complete" (no topics, no analysis), or after a task transition (no topics, no analysis).
+- **Root causes (preview button)**:
+  1. `parse_timing_phrase` did not know "tonight" (only "today"), so a confirmed "tonight" task had no normalized date and `/api/calendar/preview` returned 400 ("Task has no normalized date").
+  2. Regardless of outcome, the result/error was written only into the Calendar section far below the Tasks list, so nothing visibly happened from the Tasks list (the "tomorrow" task worked but its preview rendered offscreen).
+- **What changed**:
+  - `app/database.py`: stored analysis now also hides notes that no longer exist; topic counts skip completed notes. Design choice: completion is a *view filter*, not data destruction, so reopening a task restores the note's analysis and topic count (consistent with earlier decisions on completed-note pruning). Deleting a note already removes its insight, tasks and relations.
+  - `app/attention/dates.py`: "tonight", "this morning/afternoon/evening" normalize to today (high confidence; the clock time still comes from `time_of_day`).
+  - `app/static/app.js`: new `refreshAnalysisViews()` (latest analysis + topics + dashboard) used after note delete, note complete and task transitions; calendar preview now also reports in the Tasks status line and scrolls the preview panel into view, including on error.
+  - `app/templates/index.html`: bumped the `app.js` cache-busting key.
+- **Tests**: added 4 tests to `tests/test_isolation_regressions.py` (deleted note leaves saved analysis/dashboard/topic counts; completed note leaves them and returns on reopen; "tonight" parses as today; calendar preview succeeds for a confirmed "tonight" task). All fail on the previous code, pass now.
+- **Verification**: full suite `189 passed, 5 failed` — the 5 are the known pre-existing date-dependent tests in `tests/test_calendar.py` (hard-coded "3 Nov"). `node --check app/static/app.js` passes. Not verified in a live browser this round.
+- **Known limitation**: `fetchJson` replaces server error details with a generic message, so a failed preview shows "Unable to preview calendar event." rather than the server's specific reason. AI-created topics (e.g. "Personal") stay listed at 0 once empty.
+- **Files affected**: `app/database.py`, `app/attention/dates.py`, `app/static/app.js`, `app/templates/index.html`, `tests/test_isolation_regressions.py`, `decision.md`.
+
+## 2026-11-05 — Manually added dated task did not appear on the calendar
+
+- **What was asked**: A task added through the Tasks form ("Add task", with a due date) did not show up on the in-app calendar.
+- **Investigation (systematic-debugging)**: Reproduced at the API level first: `POST /api/tasks` with `due_on` returns 201 and `GET /api/calendar/events` for that month already returns the task (with `source_item_id: null`, `source_type: "text"`). So the backend and the calendar renderer (which already handles a missing source note) are correct. The defect was in the front end: `createQuickTask()` refreshed tasks, attention and dashboard but never called `loadCalendarEvents()`, so the calendar stayed stale until a full page reload (and would also stay on the wrong month if the task's date was in another month).
+- **What changed** (`app/static/app.js`): after a successful create, if a due date was set, the calendar view jumps to that task's month and selects that day; then `loadCalendarEvents()` is called. Bumped the `app.js` cache key in `app/templates/index.html`.
+- **Tests**: added to `tests/test_isolation_regressions.py`: backend guard (a manual dated task is returned as a calendar event) and a UI regression check that `createQuickTask` refreshes the calendar (failed before the fix, passes after).
+- **Verification**: full suite `191 passed, 5 failed` (the 5 are the known date-dependent `tests/test_calendar.py` tests). `node --check app/static/app.js` OK. Not verified in a live browser.
+- **Noted, not changed**: calendar cards for manual tasks show the badge "text" (default source type when a task has no source note); cosmetic.
+- **Files affected**: `app/static/app.js`, `app/templates/index.html`, `tests/test_isolation_regressions.py`, `decision.md`.
+
+## 2026-11-05 — Browser verification of the delete/complete/preview/manual-task fixes
+
+- **What was done**: Chrome-extension and built-in-browser tools were not available in this session, so the earlier UI fixes were verified with Playwright (installed in a throwaway venv in the scratchpad, NOT added to the project or `requirements.txt`) driving the installed Chrome headlessly. The app ran on a temporary SQLite database with `NVIDIA_API_KEY`/`OPENAI_API_KEY` blanked (offline fallback, no live AI calls) on port 8765; the real `data/life_inbox.db` was not touched. Server was stopped afterwards and the port confirmed free.
+- **Results** (real page, real clicks): (1) manual task with a due date in another month: calendar jumped to December 2026 and showed the task on the 18th; (2) deleting a note removed it from the AI-organized inbox and dashboard and lowered the topic count; (3) completing a note did the same (Health 1 → 0); (4) a confirmed "tonight" task: Preview calendar rendered the preview (dated 2026-11-05), the Tasks status line reported it, and the panel scrolled into view.
+- **Not bugs**: the script's first "calendar jumped" check failed only because the UI renders the month in uppercase ("DECEMBER 2026"); the single console error was a 404 for `/favicon.ico` (the app has no favicon), unrelated to these changes.
+- **Files affected**: `decision.md` only (no application changes). Screenshots/scripts are in the session scratchpad, not the repo.
