@@ -139,8 +139,6 @@ Run the test suite with pytest (all tests mock external AI calls with 0 paid/net
 
 The tests use temporary SQLite databases and never call live AI services.
 
-Known issue: five tests in `tests/test_calendar.py` use dates like "3 Nov" without a year, so they fail whenever the current date is later than those dates in the same year (the date parser then rolls them to next year). They need date-relative test data.
-
 ## 6. Optional: add demonstration notes
 
 The original notebook included a utility that adds realistic sample notes

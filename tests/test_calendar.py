@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 
 from tests.auth_helpers import login, register
 
+# Notes below say e.g. "3 Nov {YEAR}" with an explicit year. A bare "3 Nov" is
+# read as the *next* occurrence, so these tests used to fail every year once
+# that date had passed. Next year is always in the future, whatever today is.
+YEAR = date.today().year + 1
+
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
@@ -66,9 +71,9 @@ def test_calendar_events_validation(client):
 
 def test_calendar_events_date_range_and_undated_exclusion(client):
     # Note 1: dated inside November range
-    item1 = client.post("/api/items", json={"raw_text": "dentist on 3 Nov"}).json()
+    item1 = client.post("/api/items", json={"raw_text": f"dentist on 3 Nov {YEAR}"}).json()
     # Note 2: dated in December (outside November query)
-    item2 = client.post("/api/items", json={"raw_text": "buy flight tickets on 15 Dec"}).json()
+    item2 = client.post("/api/items", json={"raw_text": f"buy flight tickets on 15 Dec {YEAR}"}).json()
     # Note 3: completely undated note
     item3 = client.post("/api/items", json={"raw_text": "random thoughts on system design without any date"}).json()
 
@@ -76,30 +81,30 @@ def test_calendar_events_date_range_and_undated_exclusion(client):
     analyze_res = client.post("/api/analyze")
     assert analyze_res.status_code == 200
 
-    # Query for November 2026
-    events_res = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30")
+    # Query for November of the test year
+    events_res = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30")
     assert events_res.status_code == 200
     events = events_res.json()
 
     # Only note 1 should be returned
     assert len(events) == 1
     ev = events[0]
-    assert ev["event_date"] == "2026-11-03"
+    assert ev["event_date"] == f"{YEAR}-11-03"
     assert "dentist" in ev["title"].lower()
     assert ev["source_item_id"] == item1["id"]
     assert ev["source_type"] == "text"
     assert ev["status"] == "open"
 
-    # Query for December 2026
-    dec_events_res = client.get("/api/calendar/events?start=2026-12-01&end=2026-12-31")
+    # Query for December of the test year
+    dec_events_res = client.get(f"/api/calendar/events?start={YEAR}-12-01&end={YEAR}-12-31")
     assert dec_events_res.status_code == 200
     dec_events = dec_events_res.json()
     assert len(dec_events) == 1
-    assert dec_events[0]["event_date"] == "2026-12-15"
+    assert dec_events[0]["event_date"] == f"{YEAR}-12-15"
     assert dec_events[0]["source_item_id"] == item2["id"]
 
     # Undated item3 is never returned
-    all_events_res = client.get("/api/calendar/events?start=2026-01-01&end=2027-12-31")
+    all_events_res = client.get(f"/api/calendar/events?start={YEAR - 1}-01-01&end={YEAR + 1}-12-31")
     all_source_ids = {e["source_item_id"] for e in all_events_res.json()}
     assert item3["id"] not in all_source_ids
 
@@ -107,10 +112,10 @@ def test_calendar_events_date_range_and_undated_exclusion(client):
 def test_calendar_events_user_isolation(client):
     # Alice logs in and saves a dated note
     alice = register(client, "alice@calendar.test", display_name="Alice")
-    alice_item = client.post("/api/items", json={"raw_text": "dentist on 3 Nov"}).json()
+    alice_item = client.post("/api/items", json={"raw_text": f"dentist on 3 Nov {YEAR}"}).json()
     client.post("/api/analyze")
 
-    alice_events = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    alice_events = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(alice_events) == 1
     assert alice_events[0]["source_item_id"] == alice_item["id"]
 
@@ -119,14 +124,14 @@ def test_calendar_events_user_isolation(client):
     assert bob["id"] != alice["id"]
 
     # Bob's calendar should be completely empty
-    bob_events = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    bob_events = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(bob_events) == 0
 
     # Bob adds his own event
-    bob_item = client.post("/api/items", json={"raw_text": "team sync on 10 Nov"}).json()
+    bob_item = client.post("/api/items", json={"raw_text": f"team sync on 10 Nov {YEAR}"}).json()
     client.post("/api/analyze")
 
-    bob_events2 = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    bob_events2 = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(bob_events2) == 1
     assert bob_events2[0]["source_item_id"] == bob_item["id"]
     assert bob_events2[0]["source_item_id"] != alice_item["id"]
@@ -153,23 +158,23 @@ def test_calendar_events_ambiguous_and_confirmed_dates(client):
     task_id = ev["id"]
     confirm_res = client.post(
         f"/api/tasks/{task_id}/confirm-timing",
-        json={"timing_text": "2026-11-20"},
+        json={"timing_text": f"{YEAR}-11-20"},
     )
     assert confirm_res.status_code == 200
 
     # Event now has timing_confirmed=True and needs_confirmation=False on the confirmed date
-    updated_events = client.get("/api/calendar/events?start=2026-11-20&end=2026-11-20").json()
+    updated_events = client.get(f"/api/calendar/events?start={YEAR}-11-20&end={YEAR}-11-20").json()
     assert len(updated_events) == 1
     assert updated_events[0]["timing_confirmed"] is True
     assert updated_events[0]["needs_confirmation"] is False
-    assert updated_events[0]["event_date"] == "2026-11-20"
+    assert updated_events[0]["event_date"] == f"{YEAR}-11-20"
 
 
 def test_calendar_events_completed_and_dismissed_statuses(client):
-    item = client.post("/api/items", json={"raw_text": "dentist on 3 Nov"}).json()
+    item = client.post("/api/items", json={"raw_text": f"dentist on 3 Nov {YEAR}"}).json()
     client.post("/api/analyze")
 
-    events = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events) == 1
     task_id = events[0]["id"]
     assert events[0]["status"] == "open"
@@ -179,7 +184,7 @@ def test_calendar_events_completed_and_dismissed_statuses(client):
     assert complete_res.status_code == 200
 
     # Event is still on calendar but status is "completed"
-    events_after_complete = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events_after_complete = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events_after_complete) == 1
     assert events_after_complete[0]["status"] == "completed"
 
@@ -188,32 +193,32 @@ def test_calendar_events_completed_and_dismissed_statuses(client):
     assert dismiss_res.status_code == 200
 
     # Dismissed task is excluded from calendar view
-    events_after_dismiss = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events_after_dismiss = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events_after_dismiss) == 0
 
 
 def test_calendar_events_note_edit_and_delete_lifecycle(client):
-    item = client.post("/api/items", json={"raw_text": "dentist on 3 Nov"}).json()
+    item = client.post("/api/items", json={"raw_text": f"dentist on 3 Nov {YEAR}"}).json()
     client.post("/api/analyze")
 
-    events = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events) == 1
-    assert events[0]["event_date"] == "2026-11-03"
+    assert events[0]["event_date"] == f"{YEAR}-11-03"
 
     # Edit note text to change date to 10 Nov
-    client.put(f"/api/items/{item['id']}", json={"raw_text": "dentist on 10 Nov"})
+    client.put(f"/api/items/{item['id']}", json={"raw_text": f"dentist on 10 Nov {YEAR}"})
     client.post("/api/analyze")
 
-    events_after_edit = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events_after_edit = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events_after_edit) == 1
-    assert events_after_edit[0]["event_date"] == "2026-11-10"
+    assert events_after_edit[0]["event_date"] == f"{YEAR}-11-10"
 
     # Delete the note
     delete_res = client.delete(f"/api/items/{item['id']}")
     assert delete_res.status_code == 204
 
     # Orphan task is deleted; calendar has no events
-    events_after_delete = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events_after_delete = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     assert len(events_after_delete) == 0
 
 
@@ -236,7 +241,7 @@ def test_calendar_events_different_source_types(client, monkeypatch):
     monkeypatch.setenv("LIFE_INBOX_DISABLE_OCR", "1")
 
     # Text note
-    text_item = client.post("/api/items", json={"raw_text": "Dentist appointment on 3 Nov"}).json()
+    text_item = client.post("/api/items", json={"raw_text": f"Dentist appointment on 3 Nov {YEAR}"}).json()
 
     # Image note with OCR text containing a date
     img_res = client.post(
@@ -250,13 +255,13 @@ def test_calendar_events_different_source_types(client, monkeypatch):
     # Update extracted text to simulate OCR with date
     client.patch(
         f"/api/items/{img_item['id']}/extracted-text",
-        json={"extracted_text": "Flight ticket confirmation for 18 Nov"}
+        json={"extracted_text": f"Flight ticket confirmation for 18 Nov {YEAR}"}
     )
 
     client.post("/api/analyze")
 
-    events = client.get("/api/calendar/events?start=2026-11-01&end=2026-11-30").json()
+    events = client.get(f"/api/calendar/events?start={YEAR}-11-01&end={YEAR}-11-30").json()
     types_by_date = {e["event_date"]: e["source_type"] for e in events}
-    assert types_by_date.get("2026-11-03") == "text"
-    assert types_by_date.get("2026-11-18") == "image"
+    assert types_by_date.get(f"{YEAR}-11-03") == "text"
+    assert types_by_date.get(f"{YEAR}-11-18") == "image"
 
