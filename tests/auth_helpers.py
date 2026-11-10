@@ -1,6 +1,6 @@
 """Helpers for signing test clients in through the real password flow."""
 
-DEFAULT_TEST_PASSWORD = "correct horse battery staple"
+DEFAULT_TEST_PASSWORD = "Correct-Horse-9-Staple"
 
 
 def register(client, email, password=DEFAULT_TEST_PASSWORD, display_name=""):

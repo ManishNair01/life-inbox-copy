@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 import uuid
@@ -96,6 +96,7 @@ class UserRecord(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
+        Index("uq_users_google_sub", "google_sub", unique=True),
         {"sqlite_autoincrement": True},
     )
 
@@ -115,6 +116,7 @@ class UserRecord(Base):
     email_verified_at = Column(Text, nullable=True)
     adult_confirmed_at = Column(Text, nullable=True)
     terms_accepted_at = Column(Text, nullable=True)
+    google_sub = Column(Text, nullable=True)
 
 
 class AuthSessionRecord(Base):
@@ -331,6 +333,8 @@ class TaskRecord(Base):
     due_confidence = Column(Text, nullable=True)
     snoozed_until = Column(Text, nullable=True)
     reminder_at = Column(Text, nullable=True)
+    # Set when the user edits text/priority; re-analysis then leaves them alone.
+    user_edited = Column(Integer, nullable=False, default=0, server_default="0")
     status = Column(Text, nullable=False)
     dedup_key = Column(Text, nullable=False)
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -906,6 +910,72 @@ def create_password_user(
         session.add(user)
         session.flush()
         ensure_default_topics(session, owner_user_id=user.id)
+        session.commit()
+        return _user_to_dict(user)
+
+
+def get_user_credentials_by_google_sub(google_sub: str) -> Optional[dict]:
+    """Includes status/password hash. Never return this dict to a client."""
+    if not google_sub:
+        return None
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.google_sub == google_sub)
+        )
+        return _credentials_to_dict(user) if user else None
+
+
+def create_google_user(
+    *,
+    email: str,
+    display_name: str,
+    google_sub: str,
+    now_iso: str,
+) -> dict:
+    """New account whose only way in is Google (no password hash)."""
+    cleaned = email.strip().lower()
+    with SessionLocal() as session:
+        if session.scalar(
+            select(UserRecord.id).where(UserRecord.email == cleaned)
+        ) is not None:
+            raise EmailAlreadyRegisteredError(cleaned)
+        user = UserRecord(
+            email=cleaned,
+            display_name=display_name.strip() or cleaned.split("@", 1)[0],
+            auth_provider="google",
+            created_at=now_iso,
+            password_hash=None,
+            status="active",
+            failed_password_attempts=0,
+            email_verified_at=now_iso,
+            adult_confirmed_at=now_iso,
+            terms_accepted_at=now_iso,
+            google_sub=google_sub,
+        )
+        session.add(user)
+        session.flush()
+        ensure_default_topics(session, owner_user_id=user.id)
+        session.commit()
+        return _user_to_dict(user)
+
+
+def link_google_to_user(user_id: int, google_sub: str, now_iso: str) -> dict:
+    """Attach a Google identity to an existing account.
+
+    The old password is removed: sign-up never verified the email, so someone
+    could have pre-registered it. Google has now proven who owns the address.
+    """
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise ValueError("User not found")
+        user.google_sub = google_sub
+        user.email_verified_at = user.email_verified_at or now_iso
+        user.password_hash = None
+        user.password_changed_at = now_iso
+        user.failed_password_attempts = 0
+        user.locked_until = None
+        user.auth_provider = "google"
         session.commit()
         return _user_to_dict(user)
 
@@ -1997,8 +2067,10 @@ def complete_analysis_run(
                         )
                     )
             else:
-                task.text = todo["task"]
-                task.priority = todo["priority"]
+                if not task.user_edited:
+                    # Text you edited yourself stays yours (your teammates' fix).
+                    task.text = todo["task"]
+                task.priority = todo["priority"]  # the AI's; yours is user_priority
                 task.ai_timing_text = todo["when"]
                 if not task.timing_confirmed:
                     _apply_timing(task, todo.get("when"), written_on, ai_date)
@@ -2055,13 +2127,25 @@ def complete_analysis_run(
                 session.delete(existing)
 
         # Refresh deterministic relations for current inbox text.
+        # Only this owner's items/relations: never read or delete another
+        # user's data while refreshing relations.
         items = [
             _item_to_dict(item)
-            for item in session.scalars(select(InboxItemRecord)).all()
+            for item in session.scalars(
+                select(InboxItemRecord).where(
+                    InboxItemRecord.owner_user_id == owner_id
+                )
+            ).all()
         ]
-        for relation in session.scalars(select(ItemRelationRecord)).all():
-            if not relation.dismissed:
-                session.delete(relation)
+        owner_item_ids = [item["id"] for item in items]
+        if owner_item_ids:
+            for relation in session.scalars(
+                select(ItemRelationRecord).where(
+                    ItemRelationRecord.item_id_a.in_(owner_item_ids)
+                )
+            ).all():
+                if not relation.dismissed:
+                    session.delete(relation)
         session.flush()
         for relation in find_item_relations(items):
             existing = session.scalars(
@@ -2092,7 +2176,10 @@ def complete_analysis_run(
             session.scalars(
                 select(TaskSourceItemRecord.item_id)
                 .join(TaskRecord)
-                .where(TaskRecord.status == TASK_COMPLETED)
+                .where(
+                    TaskRecord.status == TASK_COMPLETED,
+                    TaskRecord.owner_user_id == owner_id,
+                )
             ).all()
         )
         persisted = result
@@ -2200,6 +2287,25 @@ def get_latest_successful_analysis() -> Optional[dict]:
                 )
             ).all()
         )
+        # The stored JSON is a snapshot; hide notes that were deleted since,
+        # exactly like completed ones.
+        existing_item_ids = set(
+            session.scalars(
+                select(InboxItemRecord.id).where(
+                    InboxItemRecord.owner_user_id == owner_id
+                )
+            ).all()
+        )
+        snapshot_ids = {
+            n.get("id")
+            for b in stored.get("buckets", [])
+            for n in b.get("notes", [])
+        } | {
+            i
+            for t in stored.get("todos", [])
+            for i in t.get("source_note_ids", [])
+        }
+        completed_item_ids |= snapshot_ids - existing_item_ids
         if completed_item_ids:
             filtered_buckets = []
             for b in stored.get("buckets", []):
@@ -3084,6 +3190,46 @@ def list_item_updates(item_id: int) -> Optional[list[dict]]:
         return updates
 
 
+def update_task_in_db(
+    task_id: int,
+    *,
+    text: Optional[str] = None,
+    priority: Optional[str] = None,
+    due_on: Optional[str] = None,
+    clear_due: bool = False,
+) -> Optional[dict]:
+    """Edit a task you own (your teammates' task editing). Each part goes
+    through the same path as the rest of the app: your priority is
+    user_priority (the AI's stays apart), a new date is set and recorded by
+    set_task_date, and edited text is kept when analysis runs again."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None or task.owner_user_id != owner_id:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        if text is not None:
+            cleaned = text.strip()
+            if not cleaned:
+                raise ValueError("Task text cannot be empty.")
+            task.text = cleaned
+            task.user_edited = 1
+        if clear_due:
+            task.timing_text = None
+            task.due_on = task.due_time = task.suggested_due_on = task.suggested_due_time = None
+            task.due_confidence = None
+            task.timing_confirmed = 0
+        task.updated_at = now
+        session.commit()
+    if priority is not None:
+        set_task_priority(task_id, priority)
+    if due_on is not None and not clear_due:
+        set_task_date(task_id, due_on)
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        return _task_to_dict(session, task) if task is not None else None
+
+
 def snooze_task_in_db(task_id: int, until_iso_date: str) -> Optional[dict]:
     owner_id = require_owner_id()
     with SessionLocal() as session:
@@ -3578,11 +3724,25 @@ def list_topics_from_db(
             statement = statement.where(TopicRecord.bot_key == bot)
         topics = session.scalars(statement).all()
         counts = {}
+        # Completed notes leave the active views, so they don't count here
+        # (your teammates' rule, with its test in test_isolation_regressions).
+        done_item_ids = set(
+            session.scalars(
+                select(TaskSourceItemRecord.item_id)
+                .join(TaskRecord)
+                .where(
+                    TaskRecord.status == TASK_COMPLETED,
+                    TaskRecord.owner_user_id == owner_id,
+                )
+            ).all()
+        )
         for insight in session.scalars(
             select(ItemInsightRecord)
             .join(InboxItemRecord, ItemInsightRecord.item_id == InboxItemRecord.id)
             .where(InboxItemRecord.owner_user_id == owner_id)
         ).all():
+            if insight.item_id in done_item_ids:
+                continue
             effective_topic = (
                 insight.user_topic_id
                 if insight.user_topic_id is not None
@@ -4385,9 +4545,13 @@ def list_relations_from_db(
 
 
 def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
         row = session.get(ItemRelationRecord, relation_id)
         if row is None:
+            return None
+        anchor = session.get(InboxItemRecord, row.item_id_a)
+        if anchor is None or anchor.owner_user_id != owner_id:
             return None
         row.dismissed = 1
         session.commit()

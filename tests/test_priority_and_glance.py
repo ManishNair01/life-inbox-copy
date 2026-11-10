@@ -88,7 +88,7 @@ def test_priority_update_rules(client):
     task_id = task_for(client, bill)["id"]
     assert client.patch(f"/api/tasks/{task_id}", json={"priority": "Urgent"}).status_code == 422
     assert client.patch(f"/api/tasks/{task_id}", json={}).status_code == 422
-    assert client.patch(f"/api/tasks/{task_id}", json={"priority": "Low", "text": "x"}).status_code == 422
+    assert client.patch(f"/api/tasks/{task_id}", json={"priority": "Low", "bogus": "x"}).status_code == 422
     assert client.patch("/api/tasks/999999", json={"priority": "Low"}).status_code == 404
     client.post("/api/auth/logout")
     register(client, "second@example.com")

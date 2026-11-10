@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Life Inbox</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20261109_beta1" />
-  <link rel="stylesheet" href="/static/shell.css?v=20261109_beta1" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261111_merge1" />
+  <link rel="stylesheet" href="/static/shell.css?v=20261111_merge1" />
 </head>
 <!-- Layout A (change 009): features on the left, capture and the chosen view in
      the centre, Captain and the five life areas on the right. data-theme="calm"
@@ -56,10 +56,12 @@
             <label>
               New password (10+ characters)
               <input id="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required />
+              <ul id="newPasswordRules" class="pw-rules" aria-live="polite"></ul>
             </label>
             <label>
               Confirm new password
               <input id="newPasswordConfirm" type="password" autocomplete="new-password" maxlength="128" required />
+              <span id="newPasswordMatch" class="pw-match" aria-live="polite"></span>
             </label>
             <button type="submit" class="secondary" id="changePasswordButton">Update password</button>
           </form>
@@ -545,9 +547,10 @@
   </article>
 </div>
 
+<script src="/static/password_rules.js?v=20261111_merge1"></script>
 <script src="/static/pagination_state.js?v=20261025_01"></script>
-<script src="/static/shell_logic.js?v=20261109_beta1"></script>
-<script src="/static/shell.js?v=20261109_beta1"></script>
-<script src="/static/app.js?v=20261109_beta1"></script>
+<script src="/static/shell_logic.js?v=20261111_merge1"></script>
+<script src="/static/shell.js?v=20261111_merge1"></script>
+<script src="/static/app.js?v=20261111_merge1"></script>
 </body>
 </html>

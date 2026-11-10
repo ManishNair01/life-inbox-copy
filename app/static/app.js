@@ -492,6 +492,23 @@ async function fetchJson(url, options, friendlyError) {
   }
 
   if (!response.ok) {
+    // Validation/state errors (4xx) carry a message meant for the user, e.g.
+    // "Task has no normalized date"; anything else stays generic.
+    if (response.status >= 400 && response.status < 500) {
+      try {
+        const body = await response.json();
+        if (body && typeof body.detail === 'string' && body.detail.length <= 300) {
+          throw new Error(body.detail);
+        }
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new Error(friendlyError);
+        }
+        if (error && error.message && error.message !== friendlyError) {
+          throw error;
+        }
+      }
+    }
     throw new Error(friendlyError);
   }
 
@@ -1249,7 +1266,7 @@ function renderNote(note) {
       setTimeout(() => root.remove(), 300);
       setStatus('noteStatus', 'Note completed and removed from active inbox.');
       await loadTasks();
-      await loadDashboard();
+      await refreshAnalysisViews();
       await loadAttention();
       await loadCalendarEvents();
     } catch {
@@ -1418,7 +1435,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
     LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
-    await loadLatestAnalysis();
+    await refreshAnalysisViews();
     await loadTasks();
     await loadAttention();
     await loadCalendarEvents();
@@ -1474,6 +1491,9 @@ function renderTask(task) {
     actions.append(
       actionButton('Complete', '', () => {
         transitionTask(task.id, 'complete', actions);
+      }),
+      actionButton('Edit', 'secondary', () => {
+        showEditTask(task, root);
       }),
       actionButton('Dismiss', 'secondary', () => {
         transitionTask(task.id, 'dismiss', actions);
@@ -1552,6 +1572,86 @@ function renderTask(task) {
   return root;
 }
 
+function showEditTask(task, root) {
+  const form = document.createElement('form');
+  form.className = 'task-edit-form';
+
+  const textInput = document.createElement('input');
+  textInput.type = 'text';
+  textInput.maxLength = 500;
+  textInput.required = true;
+  textInput.value = task.text;
+  textInput.setAttribute('aria-label', 'Task');
+
+  const prioritySelect = document.createElement('select');
+  prioritySelect.setAttribute('aria-label', 'Priority');
+  ['High', 'Medium', 'Low'].forEach((level) => {
+    const option = document.createElement('option');
+    option.value = level;
+    option.textContent = level;
+    option.selected = level === task.priority;
+    prioritySelect.appendChild(option);
+  });
+
+  const dueInput = document.createElement('input');
+  dueInput.type = 'date';
+  dueInput.setAttribute('aria-label', 'Due date');
+  dueInput.value = task.due_on || '';
+  const hadDue = Boolean(task.due_on);
+
+  const save = actionButton('Save', '', () => {});
+  save.type = 'submit';
+  const cancel = actionButton('Cancel', 'secondary', async () => {
+    await loadTasks();
+  });
+  cancel.type = 'button';
+
+  form.append(textInput, prioritySelect, dueInput, save, cancel);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const changes = {};
+    const newText = textInput.value.trim();
+    if (!newText) {
+      setStatus('taskStatus', 'Task cannot be empty.', true);
+      return;
+    }
+    if (newText !== task.text) changes.text = newText;
+    if (prioritySelect.value !== task.priority) changes.priority = prioritySelect.value;
+    if (dueInput.value && dueInput.value !== (task.due_on || '')) {
+      changes.due_on = dueInput.value;
+    } else if (!dueInput.value && hadDue) {
+      changes.clear_due_date = true;
+    }
+    if (Object.keys(changes).length === 0) {
+      await loadTasks();
+      return;
+    }
+    save.disabled = true;
+    try {
+      await fetchJson(
+        `/api/tasks/${task.id}`,
+        {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(changes)
+        },
+        'Unable to update task.'
+      );
+      setStatus('taskStatus', 'Task updated.');
+      await loadTasks();
+      await loadAttention();
+      await refreshAnalysisViews();
+      await loadCalendarEvents();
+    } catch (error) {
+      setStatus('taskStatus', error.message || 'Could not update task.', true);
+      save.disabled = false;
+    }
+  });
+
+  root.replaceChildren(form);
+  textInput.focus();
+}
+
 async function transitionTask(taskId, action, actions) {
   if (pendingTaskActions.has(taskId)) return;
 
@@ -1598,7 +1698,7 @@ async function transitionTask(taskId, action, actions) {
     setStatus('inAppCalendarStatus', messages[action]);
     await loadTasks();
     await loadAttention();
-    await loadDashboard();
+    await refreshAnalysisViews();
     await loadCalendarEvents();
   } catch {
     setStatus(
@@ -1641,6 +1741,7 @@ async function createQuickTask(event) {
   submitButton.textContent = 'Adding…';
 
   try {
+    const dueOn = dueInput.value || null;
     await fetchJson(
       '/api/tasks',
       {
@@ -1649,7 +1750,7 @@ async function createQuickTask(event) {
         body: JSON.stringify({
           text,
           priority: priorityInput.value,
-          due_on: dueInput.value || null
+          due_on: dueOn
         })
       },
       'Unable to create task.'
@@ -1658,9 +1759,18 @@ async function createQuickTask(event) {
     form.reset();
     priorityInput.value = 'Medium';
 
+    if (dueOn) {
+      // Show the month (and day) the new task landed on so it is visible.
+      const due = parseCalendarIsoDate(dueOn);
+      calendarViewYear = due.getFullYear();
+      calendarViewMonth = due.getMonth();
+      calendarSelectedDateStr = dueOn;
+    }
+
     await loadTasks();
     await loadAttention();
     await loadDashboard();
+    await loadCalendarEvents();
 
     setStatus('taskStatus', 'Task added successfully.');
     textInput.focus();
@@ -1791,6 +1901,14 @@ async function loadLatestAnalysis() {
       true
     );
   }
+}
+
+// Re-render everything derived from analysis (AI-organized inbox, topic
+// counts, dashboard) after a note is deleted or completed.
+async function refreshAnalysisViews() {
+  await loadLatestAnalysis();
+  await loadTopics();
+  await loadDashboard();
 }
 
 async function analyzeInbox(itemId = null) {
@@ -2158,6 +2276,29 @@ async function confirmTopic(asSubtopic) {
   }
 }
 
+// Main topics with their subtopics nested underneath; counts include subtopics.
+function renderDashboardTopics(topics) {
+  if (!topics || !topics.length) return '<p class="muted">Nothing here yet.</p>';
+  const ids = new Set(topics.map(t => t.id));
+  const children = {};
+  for (const t of topics) {
+    if (t.parent_topic_id && ids.has(t.parent_topic_id)) {
+      (children[t.parent_topic_id] ||= []).push(t);
+    }
+  }
+  const items = topics
+    .filter(t => !(t.parent_topic_id && ids.has(t.parent_topic_id)))
+    .map(t => {
+      const total = t.total_item_count ?? t.item_count;
+      const subs = (children[t.id] || [])
+        .map(c => `<li><strong>${esc(c.name)}</strong> · ${c.item_count}</li>`)
+        .join('');
+      return `<li><strong>${esc(t.name)}</strong> · ${total}${subs ? `<ul class="dashboard-subtopics">${subs}</ul>` : ''}</li>`;
+    })
+    .join('');
+  return `<ul>${items}</ul>`;
+}
+
 const CHART_COLORS = ['var(--li-pop)', 'var(--li-rose)', 'var(--li-amber)', 'var(--li-primary)', 'var(--li-primary-deep)'];
 
 function renderTopicsChart(topics) {
@@ -2200,29 +2341,6 @@ function renderTopicsChart(topics) {
       ${rows}
     </svg>
   `;
-}
-
-// Main topics with their subtopics nested underneath; counts include subtopics.
-function renderDashboardTopics(topics) {
-  if (!topics || !topics.length) return '<p class="muted">Nothing here yet.</p>';
-  const ids = new Set(topics.map(t => t.id));
-  const children = {};
-  for (const t of topics) {
-    if (t.parent_topic_id && ids.has(t.parent_topic_id)) {
-      (children[t.parent_topic_id] ||= []).push(t);
-    }
-  }
-  const items = topics
-    .filter(t => !(t.parent_topic_id && ids.has(t.parent_topic_id)))
-    .map(t => {
-      const total = t.total_item_count ?? t.item_count;
-      const subs = (children[t.id] || [])
-        .map(c => `<li><strong>${esc(c.name)}</strong> · ${c.item_count}</li>`)
-        .join('');
-      return `<li><strong>${esc(t.name)}</strong> · ${total}${subs ? `<ul class="dashboard-subtopics">${subs}</ul>` : ''}</li>`;
-    })
-    .join('');
-  return `<ul>${items}</ul>`;
 }
 
 async function loadDashboard() {
@@ -2507,9 +2625,16 @@ async function previewCalendarForTask(task) {
       }
     });
     root.appendChild(confirmBtn);
-    setStatus('calendarStatus', 'Preview ready — confirm explicitly to record a mock receipt.');
+    const readyMessage = 'Preview ready — confirm explicitly to record a mock receipt.';
+    setStatus('calendarStatus', readyMessage);
+    // The preview panel lives in the Calendar zone, away from the Tasks list
+    // where the button is, so report here too and bring the panel into view.
+    setStatus('taskStatus', `${readyMessage} Shown in the Calendar section.`);
+    root.scrollIntoView({behavior: 'smooth', block: 'center'});
   } catch (error) {
-    setStatus('calendarStatus', error.message || 'Calendar preview failed.', true);
+    const message = error.message || 'Calendar preview failed.';
+    setStatus('calendarStatus', message, true);
+    setStatus('taskStatus', message, true);
   }
 }
 
@@ -2553,6 +2678,10 @@ async function changePassword(event) {
   const currentPassword = document.getElementById('currentPassword');
   const newPassword = document.getElementById('newPassword');
   const confirmPassword = document.getElementById('newPasswordConfirm');
+  if (!PasswordRules.allPass(newPassword.value)) {
+    setStatus('authStatus', PasswordRules.unmetSummary(newPassword.value), true);
+    return;
+  }
   if (newPassword.value !== confirmPassword.value) {
     setStatus('authStatus', 'New passwords do not match.', true);
     return;
@@ -3121,3 +3250,18 @@ function initFilePickers() {
 }
 
 initFilePickers();
+
+if (new URLSearchParams(window.location.search).get('google') === 'linked') {
+  setStatus(
+    'authStatus',
+    'Google sign-in is now linked to this account. Your old password was removed; use "Forgot password" on the sign-in page if you want one again.'
+  );
+  window.history.replaceState({}, '', '/');
+}
+
+PasswordRules.attach(
+  document.getElementById('newPassword'),
+  document.getElementById('newPasswordRules'),
+  document.getElementById('newPasswordConfirm'),
+  document.getElementById('newPasswordMatch')
+);

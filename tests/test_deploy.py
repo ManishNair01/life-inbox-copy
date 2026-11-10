@@ -59,7 +59,7 @@ def test_smtp_needs_its_settings_and_sends_with_starttls(beta_env, monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def starttls(self):
+        def starttls(self, context=None):
             calls.append(("starttls",))
 
         def login(self, user, password):

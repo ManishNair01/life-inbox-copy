@@ -100,7 +100,7 @@ def test_page_is_the_three_pane_app(client):
     assert page.index('id="noteText"') < page.index('class="views"')
     # The shell's logic and drawing load before app.js, which reads the lens.
     scripts = re.findall(r'<script src="/static/([a-z_]+\.js)', page)
-    assert scripts == ["pagination_state.js", "shell_logic.js", "shell.js", "app.js"]
+    assert scripts == ["password_rules.js", "pagination_state.js", "shell_logic.js", "shell.js", "app.js"]
     assert "/static/shell.css" in page
 
 

@@ -250,11 +250,7 @@ def transcribe_audio(
     api_key = llm.api_key()
 
     if not api_key:
-        key_name = (
-            "NVIDIA_API_KEY"
-            if not os.getenv("OPENAI_API_KEY")
-            else "OPENAI_API_KEY"
-        )
+        key_name = "NVIDIA_API_KEY"
         return {
             "text": candidate_transcript or "",
             "cleaned_text": candidate_transcript or "",

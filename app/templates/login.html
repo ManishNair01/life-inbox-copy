@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#e6e6fa" />
   <title>Enter your Life · Life Inbox</title>
-  <link rel="stylesheet" href="/static/login.css?v=20261110_calm1" />
+  <link rel="stylesheet" href="/static/login.css?v=20261111_merge1" />
 </head>
 <body class="calm">
   <div class="sky" aria-hidden="true">
@@ -109,11 +109,12 @@
               <input id="forgotNewPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required />
               <button type="button" class="link-button toggle-password" data-target="forgotNewPassword" aria-label="Show password">Show</button>
             </span>
-            <span class="hint">At least 10 characters.</span>
+            <ul id="forgotRules" class="pw-rules" aria-live="polite"></ul>
           </label>
           <label>
             Confirm new password
             <input id="forgotNewPasswordConfirm" type="password" autocomplete="new-password" maxlength="128" required />
+            <span id="forgotMatch" class="pw-match" aria-live="polite"></span>
           </label>
           <button type="submit" class="primary" id="forgotResetButton">Reset password</button>
           <button type="button" class="link-button" id="forgotResendButton" disabled>Resend code</button>
@@ -137,11 +138,13 @@
             <input id="registerPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required aria-describedby="passwordHint" />
             <button type="button" class="link-button toggle-password" data-target="registerPassword" aria-label="Show password">Show</button>
           </span>
-          <span id="passwordHint" class="hint">At least 10 characters. A short sentence works well.</span>
+          <ul id="registerRules" class="pw-rules" aria-live="polite"></ul>
+          <span id="passwordHint" class="hint">Pick something only you would think of; avoid your name or email.</span>
         </label>
         <label>
           Confirm password
           <input id="registerPasswordConfirm" type="password" autocomplete="new-password" maxlength="128" required />
+          <span id="registerMatch" class="pw-match" aria-live="polite"></span>
         </label>
         <label class="check">
           <input id="registerAdult" type="checkbox" required />
@@ -158,6 +161,14 @@
         <button type="submit" class="primary" id="registerButton">Create New Life</button>
       </form>
 
+      <div id="googleBlock" class="google-block" hidden>
+        <p class="or-divider"><span>or</span></p>
+        <button type="button" id="googleButton" class="google-btn">
+          <span class="g-mark" aria-hidden="true">G</span>
+          <span id="googleButtonLabel">Continue with Google</span>
+        </button>
+      </div>
+
       <p id="authMessage" class="message" role="alert" aria-live="assertive"></p>
 
       <p class="card-foot">
@@ -166,6 +177,7 @@
       </p>
     </main>
   </div>
+  <script src="/static/password_rules.js"></script>
   <script src="/static/auth.js"></script>
 </body>
 </html>

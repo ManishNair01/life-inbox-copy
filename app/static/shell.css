@@ -889,3 +889,8 @@ body.sheet-open { overflow: hidden; }
 .welcome-form label { display: grid; gap: 4px; }
 .welcome-form .chips label { display: inline-flex; gap: 6px; cursor: pointer; }
 .danger-zone { border-color: var(--red-soft, #fbe3e6); }
+
+/* password rules on Change password (your teammates' feature) */
+.pw-rules { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+.pw-rule, .pw-match { font-size: 12px; color: var(--sh-muted); }
+.pw-rule.ok, .pw-match.ok { color: #1f6b3f; font-weight: 600; }

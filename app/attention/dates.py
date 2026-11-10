@@ -181,7 +181,8 @@ def parse_timing_phrase(
             time_of_day=time_of_day,
         )
 
-    if re.search(r"\btoday\b", lower):
+    # "tonight" / "this evening" etc. all mean today (the time stays in time_of_day).
+    if re.search(r"\b(today|tonight|this (?:morning|afternoon|evening))\b", lower):
         return ParsedTiming(
             original_phrase=original,
             due_date=ref,

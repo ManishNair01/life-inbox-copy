@@ -137,6 +137,7 @@
   "a different one" makes the note's own task)
 - `ai_calls` — one row per AI request: user, action, model, outcome, sizes,
   duration and provider status code; never prompt or answer text
+  AI vs confirmed timing distinguished, with normalized optional local due time
 - `notification_preferences`, `push_subscriptions`, and
   `notification_deliveries` — per-user Web Push opt-in, browser subscriptions,
   and idempotent delivery/retry history

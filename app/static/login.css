@@ -262,3 +262,20 @@ input:focus-visible { outline: none; }
 
 .card-foot { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-soft); }
 .card-foot a { color: var(--lav-deep); }
+
+/* Password rules and "Continue with Google" (your teammates' features, calm look) */
+.pw-rules { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+.pw-rule, .pw-match { font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+.pw-rule.ok, .pw-match.ok { color: #1f6b3f; font-weight: 600; }
+.google-block { margin-top: 16px; display: grid; gap: 12px; }
+.or-divider { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 12px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.08em; }
+.or-divider::before, .or-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.google-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
+  padding: 11px 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; color: var(--ink); font: 600 15px var(--sans); cursor: pointer;
+  box-shadow: 0 2px 8px rgba(70, 58, 124, 0.08);
+}
+.google-btn:hover { border-color: var(--lav-mid); background: #fbfaff; }
+.g-mark { width: 18px; height: 18px; flex: none; }
+

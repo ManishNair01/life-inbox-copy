@@ -27,6 +27,17 @@ LIFE_INBOX_TESSERACT_CMD=        # optional: full path to tesseract(.exe) if it 
 LIFE_INBOX_VISION_MODEL=         # optional: the model for image descriptions (change 021)
 LIFE_INBOX_MAX_UPLOAD_MB=5
 LIFE_INBOX_CALENDAR_PROVIDER=mock|google
+# Optional Sign in with Google (button hidden when unset). In beta/production the
+# redirect URI must be https and registered in the Google Cloud OAuth client.
+GOOGLE_CLIENT_ID=<oauth client id>
+GOOGLE_CLIENT_SECRET=<oauth client secret>
+GOOGLE_REDIRECT_URI=https://your-domain/auth/google/callback
+# Real email (password reset codes): LIFE_INBOX_EMAIL_PROVIDER=smtp, then
+LIFE_INBOX_SMTP_HOST=smtp.gmail.com
+LIFE_INBOX_SMTP_PORT=587          # 465 = SSL
+LIFE_INBOX_SMTP_USER=you@gmail.com
+LIFE_INBOX_SMTP_PASSWORD=<gmail app password>
+LIFE_INBOX_SMTP_FROM=you@gmail.com
 LIFE_INBOX_VAPID_PUBLIC_KEY=<URL-safe base64 public key>
 LIFE_INBOX_VAPID_PRIVATE_KEY=<URL-safe base64 private key>
 LIFE_INBOX_VAPID_SUBJECT=mailto:admin@example.com
@@ -37,6 +48,7 @@ with `NVIDIA_LLM_MODEL`, `NVIDIA_ASR_MODEL` and `NVIDIA_BASE_URL`; or
 `OPENAI_API_KEY` with `OPENAI_MODEL`. `LIFE_INBOX_AI_TIMEOUT_SECONDS`
 (default 60) limits how long a text request may take; speech-to-text allows
 180 seconds. Every request is counted in the `ai_calls` table.
+Optional: `OPENAI_API_KEY` for live organization only (never in automated tests).
 VAPID keys are required for Web Push. Keep the private key in `.env` locally or
 in the deployment secret store; never commit it. Generate a fresh P-256 pair
 with the installed `pywebpush` dependency and retain the displayed private key:
@@ -77,7 +89,7 @@ On `/login`, **Forgot password?** asks for the email and sends a 6-digit
 code (valid 10 minutes, single use, 5 wrong tries, max 5 codes per hour).
 In local console mode the "email" is printed in the terminal running the
 server — copy the code from there. Beta/production refuse to start with
-`console`; real delivery (Gmail SMTP, then Resend) is the next step.
+`console`; use `LIFE_INBOX_EMAIL_PROVIDER=smtp` (see the variables above) for real delivery.
 
 Operator fallback (no email needed), e.g. for old dev-login accounts:
 
