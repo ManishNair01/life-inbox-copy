@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#dff1f5" />
+  <meta name="theme-color" content="#e6e6fa" />
   <title>Enter your Life · Life Inbox</title>
-  <link rel="stylesheet" href="/static/login.css" />
+  <link rel="stylesheet" href="/static/login.css?v=20261110_calm1" />
 </head>
 <body class="calm">
   <div class="sky" aria-hidden="true">
@@ -18,17 +18,10 @@
     <section class="welcome" aria-labelledby="welcomeTitle">
       <h1 id="welcomeTitle" class="wordmark">
         <svg class="logo" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-          <defs>
-            <linearGradient id="logoFill" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#8fd3dd" />
-              <stop offset="0.55" stop-color="#7a68b5" />
-              <stop offset="1" stop-color="#463a7c" />
-            </linearGradient>
-          </defs>
-          <rect x="2" y="6" width="56" height="56" rx="16" fill="url(#logoFill)" />
-          <path d="M14 36h10l3 6h10l3-6h10v10a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4z" fill="#fff" opacity="0.95" />
-          <path d="M18 22h24M18 29h16" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity="0.8" />
-          <circle cx="54" cy="10" r="8" fill="#c8414d" stroke="#f3eefb" stroke-width="3" />
+          <rect x="3" y="7" width="54" height="54" fill="#5eead4" stroke="#0d0a1c" stroke-width="4" />
+          <path d="M14 36h10l3 6h10l3-6h10v10a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4z" fill="#0d0a1c" />
+          <path d="M18 20h24M18 27h16" stroke="#0d0a1c" stroke-width="3.5" stroke-linecap="round" />
+          <circle cx="54" cy="10" r="8" fill="#fb7185" stroke="#0d0a1c" stroke-width="3" />
         </svg>
         <span class="wordmark-text"><span class="wm-life">Life</span> Inbox</span>
       </h1>
@@ -153,6 +146,10 @@
         <label class="check">
           <input id="registerAdult" type="checkbox" required />
           <span>I am 18 years or older.</span>
+        </label>
+        <label class="check">
+          <input id="registerAi" type="checkbox" />
+          <span>Let Life Inbox use AI (NVIDIA) to file and summarise my notes. Unticked, notes are filed by simple rules on this server and nothing is sent to an AI. You can change this in Settings.</span>
         </label>
         <label class="check">
           <input id="registerTerms" type="checkbox" required />

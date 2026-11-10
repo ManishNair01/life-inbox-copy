@@ -66,8 +66,10 @@ def test_home_page_loads(client):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "<title>Life Inbox</title>" in response.text
-    assert "Analyze Entire Inbox with AI" in response.text
+    assert "Re-sort everything" in response.text
     assert 'href="/api/items/export.md" download>Export Markdown</a>' in response.text
+    assert 'id="notificationPrompt"' in response.text
+    assert 'onclick="enableNotificationsFromPrompt(event)"' in response.text
 
 
 def test_failure_retry_center_entrypoint_uses_existing_failed_filter(client):
@@ -113,6 +115,68 @@ def test_health_check(client):
     assert "database" in payload
 
 
+def test_notification_preferences_are_saved_per_user(client, monkeypatch):
+    monkeypatch.delenv("LIFE_INBOX_VAPID_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LIFE_INBOX_VAPID_PRIVATE_KEY", raising=False)
+
+    defaults = client.get("/api/notifications/settings")
+    assert defaults.status_code == 200
+    assert defaults.json()["enabled"] is False
+    assert defaults.json()["push_available"] is False
+
+    disabled = client.put(
+        "/api/notifications/settings",
+        json={
+            "enabled": False,
+            "daily_digest_time": "09:15",
+            "timezone": "America/Los_Angeles",
+            "include_unscheduled_prompt": True,
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["daily_digest_time"] == "09:15"
+    assert disabled.json()["timezone"] == "America/Los_Angeles"
+    assert disabled.json()["include_unscheduled_prompt"] is True
+
+    rejected_enable = client.put(
+        "/api/notifications/settings",
+        json={
+            "enabled": True,
+            "daily_digest_time": "09:15",
+            "timezone": "America/Los_Angeles",
+            "include_unscheduled_prompt": True,
+        },
+    )
+    assert rejected_enable.status_code == 503
+
+
+def test_push_subscription_is_user_scoped_and_not_exposed(client, monkeypatch):
+    monkeypatch.setenv("LIFE_INBOX_VAPID_PUBLIC_KEY", "public")
+    monkeypatch.setenv("LIFE_INBOX_VAPID_PRIVATE_KEY", "private")
+    subscription = {
+        "endpoint": "https://fcm.googleapis.com/fcm/send/test-subscription",
+        "keys": {"p256dh": "public-encryption-key", "auth": "auth-secret"},
+    }
+
+    registered = client.post(
+        "/api/notifications/subscriptions",
+        json=subscription,
+    )
+    assert registered.status_code == 201
+    assert registered.json() == {"registered": True}
+    settings = client.get("/api/notifications/settings").json()
+    assert settings["subscription_count"] == 1
+    assert "endpoint" not in settings
+    assert "auth-secret" not in settings.values()
+
+    register(client, "notifications-other@example.com", display_name="Other")
+    conflict = client.post(
+        "/api/notifications/subscriptions",
+        json=subscription,
+    )
+    assert conflict.status_code == 422
+
+
 def test_create_and_list_canonical_text_item(client):
     response = client.post(
         "/api/items",
@@ -134,9 +198,19 @@ def test_create_and_list_canonical_text_item(client):
         "storage_path": None,
         "extracted_text": None,
         "ai_description": None,
+        "user_context": None,
         "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
+        # change 015: only links have a card or reuse an earlier result
+        "link_card": None,
+        "reused_from": None,
+        "filing_reused": False,
+        # change 016: a note holding a secret is masked on screen
+        "looks_secret": False,
+        "secret_masked": None,
+        # change 022: a long PDF's one-time summary
+        "source_summary": None,
     }
     assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]
@@ -593,7 +667,7 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
     assert analysis_without_metadata(data) == {
         "buckets": [
             {
-                "name": "Work",
+                "name": "Work & career",
                 "notes": [
                     {
                         "id": 1,
@@ -601,7 +675,7 @@ def test_analyze_uses_deterministic_fallback_without_openai_key(client):
                         "priority": "High",
                         "tags": ["urgent", "follow-up"],
                         "rationale": (
-                            'Matched topic “Work” from keywords in the note.'
+                            "The subject decides, not the format: it mentions “team”."
                         ),
                     }
                 ],
@@ -651,7 +725,7 @@ def test_successful_analysis_persists_run_and_item_insight(client):
         assert stored == analysis_without_metadata(analysis)
         assert analysis["is_stale"] is False
         assert insight.analysis_run_id == run.id
-        assert insight.category == "Work"
+        assert insight.category == "Work & career"
         assert insight.concise_title == "Call the team tomorrow"
         assert insight.priority == "High"
 
@@ -728,7 +802,7 @@ def test_reanalysis_updates_task_by_source_without_changing_status(
         "/api/items",
         json={"raw_text": "Prepare the class notes"},
     ).json()
-    main = sys.modules["app.main"]
+    filing = sys.modules["app.filing"]
     analyses = iter(
         [
             ("Prepare class notes", "Low"),
@@ -736,46 +810,17 @@ def test_reanalysis_updates_task_by_source_without_changing_status(
         ]
     )
 
-    def analyze(_notes):
+    def file_batch(notes, topics, **_kwargs):
         task_text, priority = next(analyses)
-        return {
-            "buckets": [
-                {
-                    "name": "Work",
-                    "notes": [
-                        {
-                            "id": item["id"],
-                            "title": task_text,
-                            "priority": priority,
-                        }
-                    ],
-                }
-            ],
-            "todos": [
-                {
-                    "task": task_text,
-                    "priority": priority,
-                    "source_note_ids": [item["id"]],
-                    "when": None,
-                }
-            ],
-            "priority_view": {
-                "High": (
-                    [{"id": item["id"], "title": task_text}]
-                    if priority == "High"
-                    else []
-                ),
-                "Medium": [],
-                "Low": (
-                    [{"id": item["id"], "title": task_text}]
-                    if priority == "Low"
-                    else []
-                ),
-            },
-            "mode": "openai",
-        }
+        study = next(t for t in topics if t["name"] == "Study")
+        return [{
+            "id": note["id"], "topic": study["id"], "bot": "learn", "rule": "R5", "confidence": "high",
+            "choices": [], "title": task_text, "priority": priority, "tags": [], "reason": "Class work.",
+            "tasks": [{"task": task_text, "when": None, "date": None, "time": None}],
+            "transcript": None, "summary": None, "action": None, "filed_by": "ai",
+        } for note in notes], "nvidia_nim"
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    monkeypatch.setattr(filing, "file_batch", file_batch)
 
     client.post("/api/analyze")
     original = client.get("/api/tasks").json()[0]
@@ -792,65 +837,45 @@ def test_reanalysis_updates_task_by_source_without_changing_status(
     assert tasks[0]["source_item_ids"] == [item["id"]]
 
 
-def test_generated_task_preserves_multiple_source_links(client, monkeypatch):
+def test_generated_task_preserves_multiple_source_links(client):
+    # Filing v2 gives each task one note, but the save path still keeps a task
+    # that names several notes linked to all of them.
     first = client.post(
         "/api/items", json={"raw_text": "First source"}
     ).json()
     second = client.post(
         "/api/items", json={"raw_text": "Second source"}
     ).json()
-    main = sys.modules["app.main"]
-
-    monkeypatch.setattr(
-        main,
-        "analyze_inbox_with_openai",
-        lambda _notes: {
-            "buckets": [
-                {
-                    "name": "Work",
-                    "notes": [
-                        {
-                            "id": first["id"],
-                            "title": "First source",
-                            "priority": "Medium",
-                        },
-                        {
-                            "id": second["id"],
-                            "title": "Second source",
-                            "priority": "Medium",
-                        },
-                    ],
-                }
-            ],
-            "todos": [
-                {
-                    "task": "Follow up on both sources",
-                    "priority": "Medium",
-                    "source_note_ids": [second["id"], first["id"]],
-                    "when": "tomorrow",
-                }
-            ],
-            "priority_view": {
-                "High": [],
-                "Medium": [
-                    {"id": first["id"], "title": "First source"},
-                    {"id": second["id"], "title": "Second source"},
-                ],
-                "Low": [],
-            },
+    database = sys.modules["app.database"]
+    me = client.get("/api/auth/me").json()
+    database.set_current_owner_id((me.get("user") or me)["id"])
+    try:
+        run_id = database.start_analysis_run()
+        database.complete_analysis_run(run_id, {
+            "buckets": [{"name": "Work & career", "notes": [
+                {"id": first["id"], "title": "First source", "priority": "Medium"},
+                {"id": second["id"], "title": "Second source", "priority": "Medium"},
+            ]}],
+            "todos": [{
+                "task": "Follow up on both sources",
+                "priority": "Medium",
+                "source_note_ids": [second["id"], first["id"]],
+                "when": "tomorrow",
+            }],
+            "priority_view": {"High": [], "Medium": [
+                {"id": first["id"], "title": "First source"},
+                {"id": second["id"], "title": "Second source"},
+            ], "Low": []},
             "mode": "openai",
-        },
-    )
+        })
+    finally:
+        database.set_current_owner_id(None)
 
-    response = client.post("/api/analyze")
-
-    assert response.status_code == 200
     task = client.get("/api/tasks").json()[0]
     assert task["text"] == "Follow up on both sources"
     assert task["timing_text"] == "tomorrow"
     assert task["source_item_ids"] == [first["id"], second["id"]]
 
-    database = sys.modules["app.database"]
     with database.SessionLocal() as session:
         assert session.query(database.TaskSourceItemRecord).count() == 2
 
@@ -875,12 +900,12 @@ def test_failed_analysis_keeps_previous_success(client, monkeypatch):
         json={"raw_text": "Call the team tomorrow"},
     )
     previous = client.post("/api/analyze").json()
-    main = sys.modules["app.main"]
+    filing = sys.modules["app.filing"]
 
-    def fail_analysis(_notes):
-        raise RuntimeError("simulated provider failure")
+    def fail_filing(_notes, _topics, **_kwargs):
+        raise RuntimeError("simulated failure while filing")
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_analysis)
+    monkeypatch.setattr(filing, "file_batch", fail_filing)
 
     failed_response = client.post("/api/analyze")
 
@@ -900,34 +925,31 @@ def test_failed_analysis_keeps_previous_success(client, monkeypatch):
 
 
 def test_invalid_analysis_result_is_not_saved(client, monkeypatch):
+    # An AI answer that fails code's checks (even after the repair call) is
+    # never saved: the offline matcher files the note instead (change 014).
     client.post(
         "/api/items",
         json={"raw_text": "Call the team tomorrow"},
     )
-    main = sys.modules["app.main"]
+    filing = sys.modules["app.filing"]
+    llm = filing.llm
 
-    monkeypatch.setattr(
-        main,
-        "analyze_inbox_with_openai",
-        lambda _notes: {
-            "buckets": [],
-            "todos": [],
-            "priority_view": {"High": [], "Medium": [], "Low": []},
-            "mode": "openai",
-        },
-    )
+    def unusable(*_args, **_kwargs):
+        raise llm.InvalidOutput("topic \"Made-up topic\" doesn't exist")
+
+    monkeypatch.setattr(llm, "is_configured", lambda: True)
+    monkeypatch.setattr(llm, "complete_json", unusable)
 
     response = client.post("/api/analyze")
 
-    assert response.status_code == 500
-    assert client.get("/api/analyze/latest").status_code == 204
-
+    assert response.status_code == 200
+    assert response.json()["mode"] == "fallback_after_api_error"
     database = sys.modules["app.database"]
     with database.SessionLocal() as session:
-        run = session.get(database.AnalysisRunRecord, 1)
-        assert run.status == "failed"
-        assert run.result_json is None
-        assert session.query(database.ItemInsightRecord).count() == 0
+        insight = session.get(database.ItemInsightRecord, 1)
+        assert insight.category == "Work & career"
+        assert insight.filed_by == "offline"
+        assert session.query(database.TopicRecord).filter_by(name="Made-up topic").count() == 0
 
 
 def test_create_note_returns_friendly_error(client, monkeypatch):
@@ -1002,12 +1024,13 @@ def test_delete_note_returns_friendly_error(client, monkeypatch):
 
 
 def test_analyze_returns_friendly_error(client, monkeypatch):
-    main = sys.modules["app.main"]
+    client.post("/api/items", json={"raw_text": "Call the team tomorrow"})
+    filing = sys.modules["app.filing"]
 
-    def fail_to_analyze(_notes):
+    def fail_to_file(_notes, _topics, **_kwargs):
         raise RuntimeError("OPENAI_API_KEY=super-secret")
 
-    monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_to_analyze)
+    monkeypatch.setattr(filing, "file_batch", fail_to_file)
 
     response = client.post("/api/analyze")
 
@@ -1197,7 +1220,11 @@ def test_topics_and_dashboard_after_analysis(client):
     assert analysis["analysis_run_id"]
 
     topics = client.get("/api/topics").json()
-    assert any(topic["name"] == "Health" for topic in topics)
+    # The dentist notes are filed under a default topic of the Health area.
+    assert any(
+        topic["name"] == "Medicines & doctors" and topic["bot_key"] == "health"
+        for topic in topics
+    )
 
     created = client.post(
         "/api/topics",
@@ -1223,7 +1250,7 @@ def test_user_insight_overrides_survive_reanalysis(client):
     ).json()
     client.post("/api/analyze")
     topics = client.get("/api/topics").json()
-    topic_id = next(topic["id"] for topic in topics if topic["name"] == "Work")
+    topic_id = next(topic["id"] for topic in topics if topic["name"] == "Work & career")
 
     override = client.patch(
         f"/api/items/{item['id']}/insight",
@@ -1269,7 +1296,7 @@ def test_confirm_task_timing_is_preserved_on_reanalysis(client, monkeypatch):
     ).json()
     main = sys.modules["app.main"]
 
-    def analyze(_notes):
+    def analyze(_notes, **_kwargs):
         return {
             "buckets": [
                 {
@@ -1341,8 +1368,8 @@ def test_url_capture_persists_before_processing_and_extracts_text(client, monkey
     database = sys.modules["app.database"]
     original_add = database.add_url_item_to_db
 
-    def slow_add(url):
-        item = original_add(url)
+    def slow_add(url, **kwargs):
+        item = original_add(url, **kwargs)
         assert item["processing_status"] == "captured"
         assert item["source_url"] == "https://example.com/article"
         return item
@@ -1546,8 +1573,8 @@ def test_pdf_capture_persists_before_processing_and_extracts_text(client, monkey
     original_add = database.add_pdf_item_to_db
     pdf_bytes = make_text_pdf()
 
-    def slow_add(original_filename, storage_path, mime_type):
-        item = original_add(original_filename, storage_path, mime_type)
+    def slow_add(original_filename, storage_path, mime_type, **kwargs):
+        item = original_add(original_filename, storage_path, mime_type, **kwargs)
         assert item["processing_status"] == "captured"
         assert item["original_filename"] == "notes.pdf"
         assert item["storage_path"]
@@ -1688,8 +1715,8 @@ def test_image_capture_persists_before_processing_and_creates_preview(client, mo
     png_bytes = make_png_bytes(text="Meeting notes")
     seen = {"persisted": False}
 
-    def slow_add(filename, storage_path, mime_type):
-        item = original_add(filename, storage_path, mime_type)
+    def slow_add(filename, storage_path, mime_type, **kwargs):
+        item = original_add(filename, storage_path, mime_type, **kwargs)
         seen["persisted"] = True
         assert item["original_filename"] == "screenshot.png"
         assert item["processing_status"] == "captured"
@@ -1807,8 +1834,8 @@ def test_voice_capture_persists_before_processing(client, monkeypatch):
     wav = make_wav_bytes()
     seen = {"persisted": False}
 
-    def slow_add(filename, storage_path, mime_type):
-        item = original_add(filename, storage_path, mime_type)
+    def slow_add(filename, storage_path, mime_type, **kwargs):
+        item = original_add(filename, storage_path, mime_type, **kwargs)
         seen["persisted"] = True
         assert item["original_filename"] == "note.wav"
         assert item["processing_status"] == "captured"
@@ -2097,16 +2124,20 @@ def test_voice_nvidia_nim_pipeline_cleans_transcript(client, monkeypatch):
             text="Um, uh, remember to call Dr. Aris, like, tomorrow morning"
         )
 
-    def fake_chat_complete(**_kwargs):
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content="Remember to call Dr. Aris tomorrow morning."
-                    )
-                )
-            ]
-        )
+    def fake_chat_complete(**kwargs):
+        import json
+        import re
+
+        prompt = kwargs["messages"][-1]["content"]
+        note_id = int(re.search(r'"id": (\d+)', prompt.split("Notes (JSON):", 1)[1]).group(1))
+        answer = {"notes": [{
+            "id": note_id, "area": "health", "topic": "Medicines & doctors", "confidence": "high",
+            "rule": "R1", "choices": [], "title": "Call Dr. Aris", "priority": "High", "tags": [],
+            "reason": "A doctor's call.", "tasks": [{"task": "Call Dr. Aris", "when": "tomorrow morning",
+                                                     "date": None, "time": None}],
+            "transcript": "Remember to call Dr. Aris tomorrow morning.", "summary": None, "action": None,
+        }]}
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(answer)))])
 
     monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-key")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -2133,7 +2164,12 @@ def test_voice_nvidia_nim_pipeline_cleans_transcript(client, monkeypatch):
     assert item["item_type"] == "voice"
     assert item["processing_status"] == "ready"
     assert item["extracted_text"] == "Um, uh, remember to call Dr. Aris, like, tomorrow morning"
-    assert item["raw_text"] == "Remember to call Dr. Aris tomorrow morning."
+    # Your words stay as transcribed; the filing call's tidy version is AI output.
+    assert item["raw_text"] == "Um, uh, remember to call Dr. Aris, like, tomorrow morning"
+    assert client.post(f"/api/analyze?item_id={item['id']}").status_code == 200
+    insight = client.get(f"/api/items/{item['id']}/insight").json()
+    assert insight["cleaned_transcript"] == "Remember to call Dr. Aris tomorrow morning."
+    assert insight["filed_by"] == "ai" and insight["filing_rule"] == "R1"
 
     # Verify voice item can be edited via PUT /api/notes/{id}
     edited = client.put(
@@ -2293,6 +2329,10 @@ def test_user_isolation_prevents_cross_account_access(client):
     missing = client.get(f"/api/items/{alice_item['id']}")
     assert missing.status_code == 404
 
+    bob_dash = client.get("/api/dashboard").json()
+    assert len(bob_dash["high_priority"]) == 0
+    assert len(bob_dash["recently_captured"]) == 0
+
     deleted = client.delete(f"/api/items/{alice_item['id']}")
     assert deleted.status_code == 404
 
@@ -2379,3 +2419,95 @@ def test_single_note_analysis_and_dashboard_completion_exclusion(client, monkeyp
         }
         assert item1["id"] not in active_analysis_ids
 
+
+def test_quick_add_task_without_due_date(client):
+    response = client.post(
+        "/api/tasks",
+        json={
+            "text": "Prepare AI assignment",
+            "priority": "High",
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["text"] == "Prepare AI assignment"
+    assert task["priority"] == "High"
+    assert task["status"] == "open"
+    assert task["due_on"] is None
+    assert task["source_item_ids"] == []
+
+    tasks = client.get("/api/tasks").json()
+    assert task in tasks
+
+
+def test_quick_add_task_with_due_date(client):
+    response = client.post(
+        "/api/tasks",
+        json={
+            "text": "Submit assignment",
+            "priority": "Medium",
+            "due_on": "2026-11-15",
+        },
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["due_on"] == "2026-11-15"
+    assert task["timing_confirmed"] is True
+
+    board = client.get("/api/attention")
+    assert board.status_code == 200
+
+
+def test_quick_add_task_rejects_invalid_input(client):
+    empty_title = client.post(
+        "/api/tasks",
+        json={"text": "   ", "priority": "Medium"},
+    )
+    assert empty_title.status_code == 422
+
+    invalid_priority = client.post(
+        "/api/tasks",
+        json={"text": "Valid task", "priority": "Urgent"},
+    )
+    assert invalid_priority.status_code == 422
+
+
+def test_editing_note_updates_task_without_duplication(client):
+    # 1. Create a note and analyze it
+    item = client.post(
+        "/api/items",
+        json={"raw_text": "I need to play pickleball at 8pm today."}
+    ).json()
+    res1 = client.post(f"/api/analyze?item_id={item['id']}")
+    assert res1.status_code == 200
+
+    tasks1 = client.get("/api/tasks").json()
+    assert len(tasks1) == 1
+    assert "pickleball" in tasks1[0]["text"].lower()
+
+    # 2. Edit note to add more details (e.g. "with vijay")
+    client.put(
+        f"/api/items/{item['id']}",
+        json={"raw_text": "I need to play pickleball with vijay at 8pm today"}
+    )
+    res2 = client.post(f"/api/analyze?item_id={item['id']}")
+    assert res2.status_code == 200
+
+    # 3. Tasks list must have exactly 1 task (updated), no duplicate tasks
+    tasks2 = client.get("/api/tasks").json()
+    assert len(tasks2) == 1
+    assert "vijay" in tasks2[0]["text"].lower()
+    assert tasks2[0]["source_item_ids"] == [item["id"]]
+
+
+
+def test_note_box_is_capped_at_server_limit(client):
+    page = client.get("/").text
+    assert 'id="noteText" maxlength="2000"' in page
+    assert 'id="noteCharCount"' in page
+    assert "max 2000 characters" in page
+
+    assert client.post("/api/items", json={"raw_text": "a" * 2000}).status_code == 200
+    assert client.post("/api/items", json={"raw_text": "a" * 2001}).status_code == 422

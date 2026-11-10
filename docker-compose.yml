@@ -20,15 +20,47 @@ services:
       DATABASE_URL: postgresql+psycopg://lifeinbox:lifeinbox@db:5432/lifeinbox
       LIFE_INBOX_UPLOAD_DIR: /data/uploads
       LIFE_INBOX_AUTH_MODE: password
-      LIFE_INBOX_TIMEZONE: UTC
+      LIFE_INBOX_TIMEZONE: ${LIFE_INBOX_TIMEZONE:-Asia/Kolkata}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_LLM_MODEL: ${NVIDIA_LLM_MODEL:-nvidia/nemotron-3.5-bolt-e4b}
       NVIDIA_ASR_MODEL: ${NVIDIA_ASR_MODEL:-openai/whisper-large-v3}
+      LIFE_INBOX_EMAIL_PROVIDER: ${LIFE_INBOX_EMAIL_PROVIDER:-off}
+      LIFE_INBOX_OTP_PEPPER: ${LIFE_INBOX_OTP_PEPPER:-}
+      LIFE_INBOX_SMTP_HOST: ${LIFE_INBOX_SMTP_HOST:-}
+      LIFE_INBOX_SMTP_PORT: ${LIFE_INBOX_SMTP_PORT:-587}
+      LIFE_INBOX_SMTP_USER: ${LIFE_INBOX_SMTP_USER:-}
+      LIFE_INBOX_SMTP_PASSWORD: ${LIFE_INBOX_SMTP_PASSWORD:-}
+      LIFE_INBOX_EMAIL_FROM: ${LIFE_INBOX_EMAIL_FROM:-}
+      LIFE_INBOX_VAPID_PUBLIC_KEY: ${LIFE_INBOX_VAPID_PUBLIC_KEY:-}
+      LIFE_INBOX_VAPID_PRIVATE_KEY: ${LIFE_INBOX_VAPID_PRIVATE_KEY:-}
+      LIFE_INBOX_VAPID_SUBJECT: ${LIFE_INBOX_VAPID_SUBJECT:-mailto:admin@example.com}
     volumes:
       - uploads:/data/uploads
     depends_on:
       - db
+
+  notifications:
+    build: .
+    command: ["python", "-m", "app.notifications.scheduler"]
+    environment:
+      LIFE_INBOX_ENV: beta
+      DATABASE_URL: postgresql+psycopg://lifeinbox:lifeinbox@db:5432/lifeinbox
+      LIFE_INBOX_UPLOAD_DIR: /data/uploads
+      LIFE_INBOX_AUTH_MODE: password
+      LIFE_INBOX_TIMEZONE: ${LIFE_INBOX_TIMEZONE:-Asia/Kolkata}
+      LIFE_INBOX_VAPID_PUBLIC_KEY: ${LIFE_INBOX_VAPID_PUBLIC_KEY:-}
+      LIFE_INBOX_VAPID_PRIVATE_KEY: ${LIFE_INBOX_VAPID_PRIVATE_KEY:-}
+      LIFE_INBOX_VAPID_SUBJECT: ${LIFE_INBOX_VAPID_SUBJECT:-mailto:admin@example.com}
+      # The weekly review (change 020) runs here, so the scheduler needs the AI too.
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      NVIDIA_LLM_MODEL: ${NVIDIA_LLM_MODEL:-nvidia/nemotron-3.5-bolt-e4b}
+      LIFE_INBOX_EMAIL_PROVIDER: ${LIFE_INBOX_EMAIL_PROVIDER:-off}
+      LIFE_INBOX_OTP_PEPPER: ${LIFE_INBOX_OTP_PEPPER:-}
+    depends_on:
+      - web
+    restart: unless-stopped
 
 volumes:
   pgdata:

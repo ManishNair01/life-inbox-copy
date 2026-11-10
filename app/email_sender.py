@@ -3,14 +3,20 @@
 Providers (``LIFE_INBOX_EMAIL_PROVIDER``):
 - ``console``: prints the email in the server terminal. Local development only.
 - ``fake``: keeps emails in ``FAKE_OUTBOX`` for automated tests.
-
-Real delivery (Gmail SMTP, then Resend once there's a domain) plugs in here
-without changing callers.
+- ``smtp``: real email through an SMTP server (for example Gmail with an app
+  password): ``LIFE_INBOX_SMTP_HOST``, ``LIFE_INBOX_SMTP_PORT`` (587, STARTTLS),
+  ``LIFE_INBOX_SMTP_USER``, ``LIFE_INBOX_SMTP_PASSWORD``, ``LIFE_INBOX_EMAIL_FROM``.
+- ``off``: no email at all. "Forgot password" says it isn't set up; the
+  operator resets a password with ``python -m scripts.reset_password``.
+  Allowed for a private beta, never in production.
 """
 
 from __future__ import annotations
 
+import os
+import smtplib
 from dataclasses import dataclass
+from email.message import EmailMessage
 
 from app.config import load_config
 
@@ -42,9 +48,43 @@ def _send_fake(message: OutgoingEmail) -> None:
     FAKE_OUTBOX.append(message)
 
 
+def smtp_settings() -> dict:
+    return {
+        "host": os.getenv("LIFE_INBOX_SMTP_HOST", "").strip(),
+        "port": int(os.getenv("LIFE_INBOX_SMTP_PORT", "587") or "587"),
+        "user": os.getenv("LIFE_INBOX_SMTP_USER", "").strip(),
+        "password": os.getenv("LIFE_INBOX_SMTP_PASSWORD", ""),
+        "from": os.getenv("LIFE_INBOX_EMAIL_FROM", "").strip() or os.getenv("LIFE_INBOX_SMTP_USER", "").strip(),
+    }
+
+
+def _send_smtp(message: OutgoingEmail) -> None:
+    settings = smtp_settings()
+    email = EmailMessage()
+    email["From"] = settings["from"]
+    email["To"] = message.to
+    email["Subject"] = message.subject
+    email.set_content(message.body)
+    with smtplib.SMTP(settings["host"], settings["port"], timeout=20) as server:
+        server.starttls()
+        if settings["user"]:
+            server.login(settings["user"], settings["password"])
+        server.send_message(email)
+
+
+class EmailOff(RuntimeError):
+    """Email is switched off on this Life Inbox (LIFE_INBOX_EMAIL_PROVIDER=off)."""
+
+
+def _send_off(message: OutgoingEmail) -> None:
+    raise EmailOff("Email isn't set up on this Life Inbox.")
+
+
 _PROVIDERS = {
     "console": _send_console,
     "fake": _send_fake,
+    "smtp": _send_smtp,
+    "off": _send_off,
 }
 
 

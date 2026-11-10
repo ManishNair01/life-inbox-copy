@@ -257,6 +257,7 @@ def test_login_rotates_session_token(client):
     second = session_cookie(client)
     assert first and second and first != second
 
+    client.cookies.clear()
     client.cookies.set("life_inbox_session", first)
     assert client.get("/api/auth/me").status_code == 401
 

@@ -17,7 +17,7 @@ class ConfigError(RuntimeError):
     pass
 
 
-EMAIL_PROVIDERS = frozenset({"console", "fake"})
+EMAIL_PROVIDERS = frozenset({"console", "fake", "smtp", "off"})
 DEV_ONLY_EMAIL_PROVIDERS = frozenset({"console", "fake"})
 LOCAL_OTP_PEPPER = "local-only-otp-pepper-do-not-use-in-beta"
 
@@ -102,9 +102,15 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
     if environment in {"beta", "production"}:
         if email_provider in DEV_ONLY_EMAIL_PROVIDERS:
             errors.append(
-                "LIFE_INBOX_EMAIL_PROVIDER must send real email in "
-                "beta/production (console/fake are local only)."
+                "LIFE_INBOX_EMAIL_PROVIDER must be smtp (or off, private beta "
+                "only) in beta/production; console/fake are local only."
             )
+        if email_provider == "off" and environment == "production":
+            errors.append("LIFE_INBOX_EMAIL_PROVIDER=off is for a private beta, not production.")
+        if email_provider == "smtp":
+            for name in ("LIFE_INBOX_SMTP_HOST", "LIFE_INBOX_SMTP_USER", "LIFE_INBOX_SMTP_PASSWORD"):
+                if not os.getenv(name, "").strip():
+                    errors.append(f"{name} is required when LIFE_INBOX_EMAIL_PROVIDER=smtp.")
         if len(otp_pepper) < 32:
             errors.append(
                 "LIFE_INBOX_OTP_PEPPER must be at least 32 random characters "
@@ -136,6 +142,11 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
 
 def config_warnings(config: AppConfig) -> list[str]:
     warnings: list[str] = []
+    if config.email_provider == "off":
+        warnings.append(
+            "Email is off: \"Forgot password\" is unavailable; reset passwords with "
+            "python -m scripts.reset_password."
+        )
     if not config.nvidia_api_key:
         warnings.append(
             "NVIDIA_API_KEY is not configured; running in deterministic fallback mode."

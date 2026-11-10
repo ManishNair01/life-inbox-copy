@@ -144,13 +144,20 @@ async function handleRegister(event) {
       email,
       password,
       confirm_adult: true,
-      accept_terms: true
+      accept_terms: true,
+      // Change 025 (decision Q): unticked means AI processing is off.
+      ai_processing: $('registerAi') ? $('registerAi').checked : false
     });
-    window.location.replace('/');
+    window.location.replace('/#/welcome');
   } catch (error) {
     showMessage(error.message);
     setBusy(button, false);
   }
+}
+
+// Change 025: after deleting an account, the sign-in page says so.
+if (new URLSearchParams(window.location.search).get('deleted') === '1') {
+  window.addEventListener('DOMContentLoaded', () => showMessage('Your account and everything in it were deleted.'));
 }
 
 // --- forgot password ---------------------------------------------------------

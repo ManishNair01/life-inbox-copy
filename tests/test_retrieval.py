@@ -109,7 +109,8 @@ def test_ask_admits_insufficient_evidence(client):
     ).json()
     assert data["confidence"] == "insufficient"
     assert data["citations"] == []
-    assert "enough" in data["answer"].lower()
+    # Change 019: the honest "not found", with no AI call.
+    assert data["answer"] == "I couldn't find that in your notes, so I won't guess."
     assert data["mode"] == "extractive_fallback"
 
 

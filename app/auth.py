@@ -264,6 +264,17 @@ def change_password(
     )
 
 
+def delete_account(user_id: int, *, password: str) -> dict:
+    """Erase the account and everything in it (change 025). Your password,
+    again, is the check."""
+    from app.database import erase_user
+
+    creds = get_user_credentials_by_id(user_id)
+    if creds is None or not _verify_password(creds["password_hash"], password):
+        raise AuthError(403, "That password isn't right, so nothing was deleted.")
+    return erase_user(user_id)
+
+
 # --- forgot password (one-time code) ----------------------------------------
 
 RESET_PURPOSE = "reset_password"
@@ -303,6 +314,9 @@ def request_password_reset(email: str) -> dict:
     endpoint can't be used to discover who has an account.
     """
     cleaned = normalize_email(email)
+    if current_email_provider() == "off":
+        raise AuthError(503, "Password reset by email isn't set up on this Life Inbox. "
+                             "Ask the person who runs it to reset your password.")
     identifier = _identifier_hash(cleaned)
     now = _now()
     recent = list_recent_otp_challenges(
@@ -462,6 +476,10 @@ def end_all_sessions(user_id: int) -> int:
 
 
 def _secure_cookies() -> bool:
+    """HTTPS-only sign-in cookies: always in beta/production, and when you share
+    your own PC's Life Inbox over an HTTPS tunnel (LIFE_INBOX_SECURE_COOKIES=1)."""
+    if os.getenv("LIFE_INBOX_SECURE_COOKIES", "").strip() == "1":
+        return True
     return os.getenv("LIFE_INBOX_ENV", "local") in {"beta", "production"}
 
 

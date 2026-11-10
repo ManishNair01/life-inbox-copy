@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -109,6 +110,38 @@ def make_thumbnail_bytes(data: bytes, *, max_size: int = 320) -> bytes:
         raise ValueError("Unable to read this image for preview.") from exc
 
 
+# Change 021: where Tesseract is (the owner installs it; see docs/deployment.md).
+_TESSERACT_PLACES = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+NOT_INSTALLED = ("Text in images isn't read yet: Tesseract isn't installed on this computer "
+                 "(see docs/deployment.md, \"Reading text in images\").")
+
+
+def tesseract_cmd() -> Optional[str]:
+    """LIFE_INBOX_TESSERACT_CMD, else the usual Windows install places, else
+    None (pytesseract then looks on PATH)."""
+    chosen = os.getenv("LIFE_INBOX_TESSERACT_CMD", "").strip()
+    if chosen:
+        return chosen
+    local = os.path.join(os.getenv("LOCALAPPDATA", ""), "Programs", "Tesseract-OCR", "tesseract.exe")
+    for place in (*_TESSERACT_PLACES, local):
+        if place and os.path.isfile(place):
+            return place
+    return None
+
+
+def _prepare_for_ocr(image):
+    """Screenshots read better upright, in grey, and not tiny."""
+    from PIL import ImageOps
+
+    image = ImageOps.exif_transpose(image).convert("L")
+    if max(image.size) < 1200:
+        image = image.resize((image.width * 2, image.height * 2))
+    return image
+
+
 def run_ocr(data: bytes) -> dict:
     """OCR adapter. Graceful when Tesseract/pytesseract is unconfigured.
 
@@ -138,11 +171,14 @@ def run_ocr(data: bytes) -> dict:
             "note": "OCR not configured (install Pillow + pytesseract + Tesseract).",
         }
 
+    command = tesseract_cmd()
+    if command:
+        pytesseract.pytesseract.tesseract_cmd = command
     try:
         with Image.open(io.BytesIO(data)) as image:
-            text = pytesseract.image_to_string(image) or ""
+            text = pytesseract.image_to_string(_prepare_for_ocr(image), config="--oem 3 --psm 3") or ""
         cleaned = "\n".join(
-            line.rstrip() for line in text.splitlines()
+            line.rstrip() for line in text.splitlines() if line.strip()
         ).strip()
         return {
             "text": cleaned,
@@ -151,6 +187,8 @@ def run_ocr(data: bytes) -> dict:
             "note": None if cleaned else "OCR ran but found no text.",
         }
     except Exception as exc:
+        if type(exc).__name__ == "TesseractNotFoundError":
+            return {"text": "", "provider": "none", "available": False, "note": NOT_INSTALLED}
         logger.info("OCR failed gracefully: %s", exc)
         return {
             "text": "",
@@ -160,17 +198,69 @@ def run_ocr(data: bytes) -> dict:
         }
 
 
+def vision_model() -> str:
+    """The model for the vision call: LIFE_INBOX_VISION_MODEL, else a vision
+    model of the configured provider."""
+    from app import llm
+
+    chosen = os.getenv("LIFE_INBOX_VISION_MODEL", "").strip()
+    if chosen:
+        return chosen
+    return "meta/llama-3.2-11b-vision-instruct" if llm.provider() == "nvidia_nim" else "gpt-4o-mini"
+
+
+def needs_vision(ocr_text: str, user_context: Optional[str]) -> bool:
+    """Decision O: only an image with no readable text and no note of yours."""
+    words = re.findall(r"[A-Za-z0-9]{2,}", ocr_text or "")
+    return len(words) < 3 and not (user_context or "").strip()
+
+
+def _vision_description(data: bytes, original_filename: str) -> Optional[dict]:
+    """One vision call (through app/llm.py) for what the image shows. None on
+    any failure: the local description is used instead."""
+    import base64
+
+    from app import llm
+
+    small = make_thumbnail_bytes(data, max_size=768)
+    picture = "data:image/jpeg;base64," + base64.b64encode(small).decode("ascii")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": (
+            "Describe this saved image for a personal notes app, in JSON only: "
+            '{"title": "3-8 word title", "description": "one or two plain sentences of what it shows", '
+            '"kind": "photo|screenshot|document|diagram|other"}. Say only what is visible; '
+            "don't guess names, places or intentions.")},
+        {"type": "image_url", "image_url": {"url": picture}},
+    ]}]
+    try:
+        answer = llm.complete_text("image_vision", messages=messages, model=vision_model(), temperature=0.1)
+        data_out = llm.extract_json_object(answer)
+    except Exception as exc:
+        logger.info("Vision description failed; using the local one: %s", type(exc).__name__)
+        return None
+    description = " ".join(str(data_out.get("description") or "").split())[:400]
+    title = " ".join(str(data_out.get("title") or "").split())[:80]
+    if not description:
+        return None
+    return {"description": description, "title": title or None, "provider": "vision", "inferred": True,
+            "kind": str(data_out.get("kind") or "other")[:20]}
+
+
 def describe_image(
     *,
     original_filename: str,
     mime_type: str,
     ocr_text: str,
     ocr_note: Optional[str],
+    data: Optional[bytes] = None,
+    user_context: Optional[str] = None,
+    allow_vision: bool = False,
 ) -> dict:
     """Factual-ish description adapter. Distinguishes inferred content.
 
-    Live vision APIs are optional; default is a deterministic local summary so
-    automated tests never call paid services.
+    Change 021 (decision O): one vision call when the image has no readable
+    text and no note of yours, AI is set up and allowed for you. Otherwise a
+    deterministic local summary, so tests and offline runs never pay.
     """
     if os.getenv("LIFE_INBOX_DISABLE_VISION", "").strip().lower() in {
         "1",
@@ -181,14 +271,14 @@ def describe_image(
             original_filename, mime_type, ocr_text, ocr_note
         )
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return _fallback_description(
-            original_filename, mime_type, ocr_text, ocr_note
-        )
+    if allow_vision and data and needs_vision(ocr_text, user_context):
+        from app import llm
 
-    # Live vision is intentionally not invoked from the default path so tests
-    # and local runs stay free of paid calls. Operators can extend this adapter.
+        if llm.is_configured():
+            described = _vision_description(data, original_filename)
+            if described is not None:
+                return described
+
     return _fallback_description(
         original_filename, mime_type, ocr_text, ocr_note
     )
@@ -239,6 +329,8 @@ def process_image_bytes(
     *,
     original_filename: str,
     mime_type: str,
+    user_context: Optional[str] = None,
+    allow_vision: bool = False,
 ) -> dict:
     """Run thumbnail + OCR + description. Always returns a processable result."""
     # Thumbnail generation validates the image is readable.
@@ -249,8 +341,11 @@ def process_image_bytes(
         mime_type=mime_type,
         ocr_text=ocr["text"],
         ocr_note=ocr.get("note"),
+        data=data,
+        user_context=user_context,
+        allow_vision=allow_vision,
     )
-    title = _title_from_filename(original_filename)
+    title = description.get("title") or _title_from_filename(original_filename)
     ocr_text = ocr["text"]
     ai_description = description["description"]
 
@@ -272,4 +367,5 @@ def process_image_bytes(
         "ocr_available": ocr["available"],
         "ocr_note": ocr.get("note"),
         "description_inferred": True,
+        "description_provider": description.get("provider"),
     }

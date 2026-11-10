@@ -1,0 +1,61 @@
+# Life Inbox on one server (a VPS) with automatic HTTPS (Caddy).
+# Copy deploy/env.example to .env, fill it in, point your domain at the
+# server, then:  docker compose -f docker-compose.vps.yml up -d --build
+# See docs/deploy-container.md. Nothing here buys anything or opens DNS by itself.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lifeinbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: lifeinbox
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://lifeinbox:${POSTGRES_PASSWORD}@db:5432/lifeinbox
+      LIFE_INBOX_UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  # Notifications, Scout's weekly push and the weekly review (changes 018, 020).
+  scheduler:
+    build: .
+    command: ["python", "-m", "app.notifications.scheduler"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://lifeinbox:${POSTGRES_PASSWORD}@db:5432/lifeinbox
+      LIFE_INBOX_UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LIFE_INBOX_DOMAIN: ${LIFE_INBOX_DOMAIN:?Set LIFE_INBOX_DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

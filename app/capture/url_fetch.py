@@ -199,6 +199,9 @@ def fetch_url(url: str) -> dict:
             }
         else:
             extracted = extract_article(text, current)
+            # The page itself, for the link card's structured data (change
+            # 015). Kept in memory only; the card is what's stored.
+            extracted["html"] = text
         return {
             "final_url": current,
             "status_code": response.status_code,

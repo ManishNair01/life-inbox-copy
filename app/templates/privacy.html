@@ -10,26 +10,67 @@
   <main class="wrap legal">
     <p class="draft-banner">Draft for private beta. This text has not been reviewed by a lawyer and will be replaced before public launch.</p>
     <h1>Privacy Policy</h1>
-    <p class="muted">Version: draft 2026-10-16</p>
+    <p class="muted">Version: draft 2026-11-09</p>
 
     <h2>What we collect</h2>
     <ul>
       <li><strong>Account data:</strong> your email address, your name, and a one-way hash of your password. We never store your password itself.</li>
-      <li><strong>Your content:</strong> notes, links, PDFs, images and voice memos you add, plus text extracted from them.</li>
+      <li><strong>Your content:</strong> notes, links, PDFs, images and voice memos you add, the note you write about a saved source, plus text extracted from them.</li>
       <li><strong>Security data:</strong> sign-in sessions (time created, last used, browser description) so we can keep your account secure and let you sign out.</li>
+      <li><strong>AI usage records:</strong> for each request to the AI provider, which feature made it, the model, whether it worked, its size and how long it took. Never the text that was sent or returned.</li>
     </ul>
 
     <h2>Why we use it</h2>
     <p>Only to run Life Inbox for you: signing you in, storing and organizing your content, and keeping the service secure. We do not sell your data or use it for advertising.</p>
 
     <h2>AI processing</h2>
-    <p>If AI features are enabled by the operator, the content you choose to organize may be sent to OpenAI to generate summaries, tasks and answers. A per-user setting to control this is planned.</p>
+    <p>When the operator switches AI features on, Life Inbox sends the text needed for each task to <strong>NVIDIA</strong> (NVIDIA NIM), which runs the AI model and returns the result:</p>
+    <ul>
+      <li><strong>Organizing a note:</strong> the note, any note you wrote about a source, and the source's text (for example a web page's text, a PDF's text or text read from an image).</li>
+      <li><strong>Voice memos:</strong> the audio, to turn it into text, then the transcript, to tidy it.</li>
+      <li><strong>Ask My Inbox:</strong> your question and the few passages from your notes that match it.</li>
+      <li><strong>Creating a topic:</strong> its name and description, and the names of your existing topics.</li>
+    </ul>
+    <p>Your email address, name and password are never sent. If the operator uses OpenAI instead of NVIDIA, the same content goes to OpenAI. Before public launch this section will also state where the provider processes data and how long it keeps it. </p>
+
+    <p><strong>Your AI switch.</strong> When you create your account you choose whether Life Inbox may use AI for your notes; the box starts unticked, which means off. Accounts made before this choice existed start with AI on. You can change it any time in Settings, under "AI processing". While it's off, nothing of yours is sent to an AI provider: notes are filed by simple rules on the Life Inbox server, Ask me quotes your own notes, and there's no greeting, summaries, weekly review, image description or voice transcription.</p>
+    <p>With AI on, these features also send what they need:</p>
+    <ul>
+      <li><strong>Captain's greeting</strong> (once a day): how many questions wait for you and the words of your next few tasks.</li>
+      <li><strong>Area summaries</strong> (when an area changes): the titles of that area's notes and its open tasks; never a note that holds a secret.</li>
+      <li><strong>Weekly review</strong> (once a week): what Life Inbox remembers about you, what you did with your tasks that week, and the titles of a few notes that might deserve a new topic. It only suggests; nothing is created or kept without you.</li>
+      <li><strong>Ask me</strong>: your question, the matching passages from your notes, the remembered facts you confirmed that match it, and your tasks on the days you asked about.</li>
+      <li><strong>Long PDFs</strong>: the start of the text and its headings, once, to write a summary.</li>
+      <li><strong>Images</strong> with no readable text and no note of yours: a small copy of the image, once, to describe it.</li>
+    </ul>
+
+    <h2>Links you save</h2>
+    <p>When you save a link, the Life Inbox server fetches that page to read its title and text. The website therefore receives the link and the server's internet address; for YouTube links, that is YouTube (Google). Your browser does not contact the site to save the link, and no account or cookies of yours are used.</p>
+    <p>For YouTube and Vimeo videos, the server also asks the site's public oEmbed service for the video's exact title and channel. From any page it reads the facts the page itself publishes for search engines (for example a recipe's ingredients, an article's date, an event's place). Before saving, it removes tracking parts from the link (such as <code>utm_</code> and <code>si=</code>). Life Inbox shows saved links as text only: it never loads a video's pictures or player in your browser.</p>
+
+    <h2>What Life Inbox remembers about you</h2>
+    <p>Life Inbox learns a little about you so it can file your notes better: choices you make (a note you move to another topic, a priority or date you set, an answer to Captain's questions) and facts that your own words state ("You run your college's events"). A fact suggested from your words is marked as not confirmed until you confirm it or it comes up again. It never learns from the text of a link, PDF or image you saved.</p>
+    <p>When memory in filing is switched on, the confirmed facts that relate to a new note, and your plans for the next two weeks, are sent with that note to the AI provider so it can file it. Facts not yet confirmed are never sent. The note page says which facts were used. If a note seems to move one of your plans, nothing changes until you answer Captain's question.</p>
+    <p>Every fact is listed under "What I learned about you", with the note it came from. You can confirm, edit or delete any fact; a deleted fact's text is erased and it is not suggested again. Your export includes your memory.</p>
+    <p><strong>Health memory</strong> stays off until you switch it on. It covers everything in your Health area (medicines and doctors, fitness and food, mind and mood) and the medical notes you keep about people you care for, such as family members. While it's off, nothing health-related is kept as memory; switching it off again deletes what it held.</p>
+    <p><strong>Secrets.</strong> A note that looks like it holds a password, PIN, OTP, card number, bank account, Aadhaar or PAN number, Wi-Fi key or API key is hidden on screen until you tap it, is never sent to the AI provider, and never becomes memory. One exception: a voice note's audio is turned into text by the speech service before Life Inbox can read it, so don't say a secret out loud in a voice note.</p>
+    <p><strong>Images.</strong> Text in an image is read on this computer (OCR). Only an image with no readable text and no note of yours is sent once to the AI provider, to describe what it shows; the description is marked as AI output and kept apart from your words.</p>
 
     <h2>Who can see your content</h2>
-    <p>Only you, when signed in to your account. Other users cannot see your content.</p>
+    <p>Only you, when signed in to your account. Other users cannot see your content. The AI provider receives only what is described under AI processing, to return a result.</p>
+
+    <h2>How long we keep it, and deleting it</h2>
+    <p>Your content stays until you delete it. Deleting a note removes it and its file. <strong>Delete my account</strong> (in Settings, with your password) erases your account and everything in it at once: notes and their files, tasks, topics, what Life Inbox learned about you, settings, sign-ins and the AI usage records. It can't be undone, so export first if you want a copy. The operator's database backups may still hold it until they are replaced.</p>
 
     <h2>Your rights</h2>
-    <p>Under GDPR and India's Digital Personal Data Protection Act 2023 you can ask to access, correct, export or delete your data, and withdraw consent. In-app export and account deletion are planned; until then, contact the operator.</p>
+    <p>Under the EU and UK GDPR and India's Digital Personal Data Protection Act 2023 (DPDP), you can:</p>
+    <ul>
+      <li><strong>See and take your data</strong>: Settings → "Export Markdown" gives you every note and what Life Inbox learned about you, in one file (access and portability).</li>
+      <li><strong>Correct it</strong>: edit any note, your note on a source, or any remembered fact.</li>
+      <li><strong>Erase it</strong>: delete a note or a fact, or use Delete my account.</li>
+      <li><strong>Withdraw consent</strong> at any time, as easily as you gave it: switch AI processing off, or switch health memory off (which deletes what it held).</li>
+      <li><strong>Object or complain</strong>: contact the operator (below). Under DPDP you may also complain to the Data Protection Board of India, and nominate someone to use these rights for you if you can't; under GDPR, to your data protection authority.</li>
+    </ul>
 
     <h2>Age</h2>
     <p>Life Inbox is only for people aged 18 or older.</p>

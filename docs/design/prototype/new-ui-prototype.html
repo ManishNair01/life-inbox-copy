@@ -1,0 +1,396 @@
+<!doctype html>
+<!--
+  PROTOTYPE: throwaway, not production code. Do not link from the app.
+  Question it answers: "What should the redesigned Life Inbox home look like?"
+  Three structurally different arrangements of the agreed three-pane idea,
+  switchable with ?variant=A|B|C (floating bar at the bottom, or the arrow keys):
+    A  Three panes: features left, composer + content centre, bots right (owner's pick;
+       revised: fits the window, no dead space, home is a card grid, topics pack as masonry)
+    B  Captain conversation: chat-style centre, features rail left, "studio" view panel right
+    C  Today focus: one calm centre column, features and bots as slim rails that open sheets
+  Data is the owner's real sample notes, hard-coded. Nothing is saved; reload resets it.
+  Life bots are the five areas from docs/research-life-categories.md, 3 default topics each,
+  filed by rules R1-R6; an unclear note waits in Captain's "Needs you" (no catch-all topic).
+  Styling copies the calm "Enter your Life" login palette (powder blue, lavender, soft red).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PROTOTYPE · Life Inbox new UI</title>
+<style>
+:root{--powder:#b0e0e6;--powder-soft:#dff1f5;--lav:#e6e6fa;--lav-mid:#c9b8ec;--lav-deep:#5b4a99;--lav-deeper:#463a7c;--rose:#f3c4cc;--red:#c8414d;--red-soft:#fbe3e6;--ink:#2e2a47;--ink-soft:#5f5a7a;--line:#d9d3ee;--card:rgba(255,255,255,.74);--amber-soft:#fdf1d8;--amber:#8a5a00;--green-soft:#e3f4ea;--green:#1f6b3f;
+--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;--sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;min-height:100vh;font-family:var(--sans);color:var(--ink);font-size:14px;background:linear-gradient(160deg,var(--powder-soft) 0%,var(--lav) 52%,#f7ecf3 100%);background-attachment:fixed}
+button{font:inherit;cursor:pointer}
+.glass{background:var(--card);border:1px solid rgba(255,255,255,.85);border-radius:20px;box-shadow:0 24px 50px -30px rgba(70,58,124,.35);backdrop-filter:blur(14px)}
+.top{display:flex;align-items:center;gap:14px;padding:14px 22px}
+.wm{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-weight:600;font-size:24px;letter-spacing:-.01em}
+.wm i{font-style:italic;font-weight:500;color:var(--red)}
+.lens{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:var(--lav-deep);color:#fff;font-size:12px}
+.lens button{background:none;border:0;color:#fff;padding:0 2px;font-size:14px}
+.av{width:34px;height:34px;border-radius:50%;background:var(--lav-mid);display:grid;place-items:center;font-weight:600;color:var(--lav-deeper);margin-left:auto}
+.nav{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;color:var(--ink-soft);border:0;background:none;width:100%;text-align:left}
+.nav:hover{background:rgba(255,255,255,.6)}.nav.on{background:#fff;color:var(--lav-deeper);box-shadow:0 2px 8px rgba(70,58,124,.12)}
+.nav svg{flex:none}
+.sec{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin:14px 12px 6px}
+.bot{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:12px;border:1px solid transparent;background:none;width:100%;text-align:left;color:var(--ink)}
+.bot:hover{background:rgba(255,255,255,.6)}.bot.on{background:#fff;border-color:var(--lav-mid)}
+.bico{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex:none}
+.badge{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--red-soft);color:#9f2a35}
+.h1{font-family:var(--serif);font-weight:500;font-size:26px;margin:0}
+.h2{font-family:var(--serif);font-weight:500;font-size:20px;margin:0}
+.mut{color:var(--ink-soft);font-size:12.5px}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:2px 9px;border-radius:999px;background:rgba(201,184,236,.45);color:var(--lav-deeper);border:0;white-space:nowrap}
+button.chip:hover{background:var(--lav-mid)}
+.pri{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-hi{background:var(--red-soft);color:#9f2a35}.p-md{background:var(--amber-soft);color:var(--amber)}.p-lo{background:rgba(176,224,230,.55);color:#1f6170}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid rgba(201,184,236,.45)}
+.link{background:none;border:0;padding:0;color:var(--ink);text-align:left}.link:hover{color:var(--lav-deep);text-decoration:underline}
+.btn{border:0;border-radius:12px;padding:9px 14px;background:linear-gradient(135deg,var(--lav-deeper),var(--lav-deep));color:#fff;font-weight:600}
+.btn2{border:1.5px solid var(--line);border-radius:12px;padding:7px 12px;background:#fff;color:var(--lav-deeper);font-weight:600;font-size:12.5px}
+.btn2:hover{border-color:var(--lav-deep)}
+.compose{padding:16px 18px}
+.compose textarea{width:100%;min-height:70px;border:0;background:transparent;resize:vertical;font:inherit;font-size:15px;color:var(--ink);outline:none}
+.compose textarea::placeholder{color:#9a95b3}
+.att{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.attb{border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:5px 11px;font-size:12px;color:var(--lav-deeper)}
+.attchip{display:inline-flex;align-items:center;gap:8px;margin:8px 0;padding:6px 10px;border-radius:12px;background:var(--powder-soft);font-size:12.5px}
+.grid-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.tile{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px;text-align:left;color:var(--ink)}
+.tile:hover{border-color:var(--lav-deep);transform:translateY(-1px)}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.day{background:#fff;border:1px solid var(--line);border-radius:12px;min-height:64px;padding:6px;text-align:left;font-size:12px;color:var(--ink)}
+.day:hover{border-color:var(--lav-deep)}.day.today{outline:2px solid var(--lav-deep)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin:4px 2px 0 0}
+.dash{border:1.5px dashed var(--lav-deep);background:transparent}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.col{background:rgba(255,255,255,.55);border-radius:16px;padding:10px}
+.tcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px 10px;margin-top:8px;text-align:left;width:100%;color:var(--ink)}
+.tcard:hover{border-color:var(--lav-deep)}
+.metric{background:#fff;border-radius:16px;padding:14px;border:1px solid var(--line)}
+.metric b{display:block;font-family:var(--serif);font-weight:500;font-size:28px}
+.bar{height:10px;border-radius:999px;background:rgba(201,184,236,.35);overflow:hidden}.bar>span{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--powder),var(--lav-deep))}
+.need{background:#fff;border:1px solid var(--line);border-radius:16px;padding:12px 14px;margin-top:10px}
+.needs{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}.needs>.need{flex:1 1 230px;margin-top:0}
+.need.warn{border-color:#f0c38a;background:#fffaf0}
+.pop{position:absolute;z-index:30;width:290px;padding:14px;border-radius:18px;background:#fff;border:1px solid var(--line);box-shadow:0 24px 50px -20px rgba(70,58,124,.5)}
+.pcal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center;font-size:12px;margin-top:8px}
+.pcal button{border:0;background:none;border-radius:8px;padding:6px 0;color:var(--ink)}.pcal button:hover{background:var(--lav)}
+.pcal .sel{background:var(--lav-deep);color:#fff}.pcal .sug{outline:1.5px dashed var(--lav-deep)}
+.sheet-bg{position:fixed;inset:0;background:rgba(46,42,71,.25);z-index:20;display:flex;justify-content:flex-end}
+.sheet{width:min(560px,100%);height:100%;overflow:auto;padding:22px;background:#fbfaff;border-left:1px solid var(--line)}
+.bubble{max-width:82%;padding:10px 14px;border-radius:16px;line-height:1.55}
+.b-me{margin-left:auto;background:var(--lav-deep);color:#fff;border-bottom-right-radius:4px}
+.b-ai{background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+.how{margin-top:8px;padding:8px 10px;border-radius:12px;background:var(--powder-soft);font-size:12px;color:#1f4f59}
+.cite{border:0;background:var(--lav);color:var(--lav-deeper);border-radius:6px;padding:0 5px;font-size:11px;vertical-align:1px}
+.toast{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:13px}
+.proto{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:70;display:flex;align-items:center;gap:6px;background:#111;color:#fff;border-radius:999px;padding:6px 8px;font:600 12px/1 var(--sans);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.proto button{background:#333;color:#fff;border:0;border-radius:999px;width:28px;height:28px}
+.proto span{padding:0 10px}
+/* layouts */
+.shellA{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.A{flex:1;min-height:0;display:grid;grid-template-columns:232px minmax(0,1fr) 260px;gap:16px;padding:0 22px 18px}
+.paneA{min-height:0;overflow:auto;display:flex;flex-direction:column;padding:12px}
+.centerA{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:14px;padding:0 2px 64px}
+.homeGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid rgba(255,255,255,.85);border-radius:20px;padding:16px 18px;box-shadow:0 18px 40px -30px rgba(70,58,124,.35)}
+.cardHead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.cardHead .h2{font-size:17px}
+.mini{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid rgba(201,184,236,.45);font-size:13px}
+.botline{font-size:11.5px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.masonry{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));grid-auto-rows:6px;grid-auto-flow:dense;column-gap:14px;align-items:start}
+.ghost{background:transparent;border:1.5px dashed var(--lav-mid);box-shadow:none}
+.masonry>.group{margin:0}
+.trow{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:0;border-radius:12px;background:transparent;text-align:left;color:var(--ink)}
+.trow:hover{background:rgba(255,255,255,.8)}
+.trow.sub{padding-left:30px;font-size:13px}
+.trow.empty{color:var(--ink-soft)}
+.count{margin-left:auto;font-family:var(--serif);font-size:18px}
+.paneFoot{margin-top:auto;padding-top:12px;border-top:1px solid rgba(201,184,236,.45)}
+.spark{display:flex;align-items:flex-end;gap:6px;height:70px;margin:8px 0 4px}
+.spark>div{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.spark span.b{width:100%;max-width:22px;border-radius:7px 7px 3px 3px}
+.B{display:grid;grid-template-columns:230px minmax(0,1fr) minmax(0,440px);gap:16px;padding:0 22px 80px}
+.C{display:grid;grid-template-columns:64px minmax(0,760px) 64px;justify-content:center;gap:22px;padding:0 22px 80px}
+.rail{display:flex;flex-direction:column;gap:6px;align-items:center;padding:10px 0;position:sticky;top:12px;height:fit-content}
+.rbtn{width:46px;height:46px;border-radius:14px;border:0;background:rgba(255,255,255,.6);display:grid;place-items:center;color:var(--ink-soft);position:relative}
+.rbtn:hover,.rbtn.on{background:#fff;color:var(--lav-deeper)}
+.rbtn .badge{position:absolute;top:-4px;right:-6px;margin:0}
+@media (max-width:900px){.shellA{height:auto;overflow:visible}.centerA,.paneA{overflow:visible}.A,.B{grid-template-columns:1fr}.C{grid-template-columns:1fr}.rail{flex-direction:row;position:static;justify-content:center;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="layer"></div>
+<div class="proto" id="proto"></div>
+<script>
+// ---------------------------------------------------------------- icons
+const I={home:'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',topics:'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',timeline:'M3 12h18M7 12V7M12 12V5M17 12V9',calendar:'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',flag:'M5 21V4h11l-2 4 2 4H5',dash:'M4 13h6v7H4zM14 4h6v16h-6zM4 4h6v6H4z',ask:'M4 5h16v11H9l-5 4z',crown:'M3 8l4 4 5-7 5 7 4-4-2 11H5z',scout:'M5 15a3 3 0 1 0 6 0 3 3 0 1 0-6 0M13 15a3 3 0 1 0 6 0 3 3 0 1 0-6 0M8 12l2-6h4l2 6',learn:'M2 9l10-5 10 5-10 5zM6 11v5c3 2 9 2 12 0v-5',money:'M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2zM9 8h6M9 12h6',health:'M3 12h4l2-5 4 10 2-5h6',fun:'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.9z',people:'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20c0-4 3-6 6-6s6 2 6 6M17 11a3 3 0 1 0 0-6M17 14c3 0 5 2 5 6',x:'M6 6l12 12M18 6L6 18',back:'M15 6l-6 6 6 6',link:'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',spark:'M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2'};
+const ic=(n,s=18)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${I[n]}"/></svg>`;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------------------------------------------------------------- data (owner's real sample notes)
+// The five life areas (docs/research-life-categories.md). Each starts with 3 default topics;
+// Python and Pill reminder are the owner's own subtopics, showing users can add more.
+const BOTS={
+ learn:{n:'Learning & work',i:'learn',c:'#dcd3f7',fg:'#463a7c',topics:['Study','Python','Work & career','Skills & projects']},
+ money:{n:'Money & home',i:'money',c:'#fdf1d8',fg:'#8a5a00',topics:['Bills & subscriptions','Bank, tax & documents','Home & errands']},
+ health:{n:'Health',i:'health',c:'#fbe3e6',fg:'#9f2a35',topics:['Medicines & doctors','Pill reminder','Fitness & food','Mind & mood']},
+ people:{n:'People',i:'people',c:'#e3f4ea',fg:'#1f6b3f',topics:['Family','Friends & partner','Occasions & gifts']},
+ fun:{n:'Fun & interests',i:'fun',c:'#e3edfb',fg:'#2f5e9e',topics:['Watch, read & listen','Cooking & hobbies','Trips & places']}};
+const TOPICS={'Study':{bot:'learn',parent:null,d:'Courses, exams, assignments, college life'},'Python':{bot:'learn',parent:'Study',d:'I want to learn Python'},
+ 'Work & career':{bot:'learn',parent:null,d:'Job or internship tasks, meetings, interviews'},'Skills & projects':{bot:'learn',parent:null,d:'Tutorials, tools to try, side projects, app ideas'},
+ 'Bills & subscriptions':{bot:'money',parent:null,d:'Rent, bills, EMIs, subscriptions, fees'},'Bank, tax & documents':{bot:'money',parent:null,d:'Savings, tax, insurance, IDs, warranties'},'Home & errands':{bot:'money',parent:null,d:'Groceries, shopping, chores, repairs, pets'},
+ 'Medicines & doctors':{bot:'health',parent:null,d:'Pills, refills, appointments, tests'},'Pill reminder':{bot:'health',parent:'Medicines & doctors',d:'When to take which pills'},
+ 'Fitness & food':{bot:'health',parent:null,d:'Workouts, sport, sleep, diet'},'Mind & mood':{bot:'health',parent:null,d:'Stress, therapy, meditation, journaling'},
+ 'Family':{bot:'people',parent:null,d:'Parents, siblings, kids: needs and plans'},'Friends & partner':{bot:'people',parent:null,d:'Catch-ups, people to call or message'},'Occasions & gifts':{bot:'people',parent:null,d:'Birthdays, dates, weddings, parties, gifts'},
+ 'Watch, read & listen':{bot:'fun',parent:null,d:'Shows, films, books, podcasts, videos'},'Cooking & hobbies':{bot:'fun',parent:null,d:'Recipes to try, games, crafts'},'Trips & places':{bot:'fun',parent:null,d:'Holidays, bookings, packing, places to visit'}};
+// rule = the boundary rule (R1-R6) that decided the area; shown under "Why it's here".
+// status 'needs' = Captain wasn't sure (R6): the note waits in "Needs you" with its choices.
+let ITEMS=[
+ {id:1,title:'Take Python quiz',topic:'Python',type:'Note',pri:'hi',date:'2026-11-03',time:'11:00',conf:'note',note:null,src:'I need to give Python quiz tomorrow at 11:00am',why:'Explicit exam tomorrow at 11:00',rule:'R5 · the subject decides: a course quiz',status:'open'},
+ {id:2,title:'Make white sauce pasta',topic:'Occasions & gifts',type:'Link',pri:'hi',date:null,sug:'2026-11-07',fuzzy:'coming saturdy',note:'I want to make White Sauce Pasta for my Date on coming saturdy.',src:'youtube.com · Kabita\'s Kitchen · creamy white sauce pasta recipe',why:'Planned for a date on Saturday',rule:'R3 · your purpose beats the content: it\'s a recipe, but it\'s "for my Date"',status:'open'},
+ {id:3,title:'Talk to Admin about Halloween budget',topic:'Study',type:'Image',pri:'hi',date:null,note:'I have to talk to Admin team of my college about budget for Halloween event.',src:'Halloween final Mail communication image.png (text not readable yet)',why:'Discussion needed about an event budget',rule:'R4 · it\'s the college\'s budget, not your money',status:'open'},
+ {id:4,title:'Practice Statistics hypothesis testing',topic:'Study',type:'PDF',pri:'md',date:null,note:'These are the questions I need to practice for Statistics.',src:'8 PP - Hypothesis Testing.pdf',why:'Practice to do, no deadline',rule:'R3 · your note says it\'s "for Statistics"',status:'open'},
+ {id:5,title:'Cancel Netflix subscription',topic:'Bills & subscriptions',type:'Note',pri:'md',date:'2026-12-15',conf:'note',note:null,src:'I need to cancel my Netflix subscription on 15th December 2026',why:'Scheduled, not urgent yet',rule:'R2 · cancelling a subscription is a money task, even for a show',status:'open'},
+ {id:6,title:'Butter chicken recipe',topic:'Cooking & hobbies',type:'Note',pri:'lo',date:null,note:null,src:'Butter chicken: marinate 500 g chicken in yogurt, ginger-garlic paste…',why:'Saved for someday',rule:'R5 · a recipe to try, with no occasion',status:'open'},
+ {id:7,title:'Nemotron AI coding agent video',topic:null,choices:['Skills & projects','Watch, read & listen'],type:'Link',pri:'lo',date:null,note:null,src:'youtube.com · The free AI coding agent you need to try',why:'A coding-tool video saved without a note',hint:'saved without a note',rule:'R6 · two areas fit equally, so Captain asks instead of guessing',status:'needs'}];
+const MEMORY={learn:[['Student, learning Python and Statistics','notes #1, #4'],['Organises a college Halloween event','note #3'],['Python quiz on Tue 3 Nov, 11:00','note #1 (time memory)']],
+ money:[['Tracks subscriptions to cancel','note #5'],['Netflix cancel on 15 Dec','note #5 (time memory)']],
+ health:[], people:[['Date night planned for Saturday','note #2 (time memory, unconfirmed)']], fun:[['Likes cooking Indian food and pasta','notes #2, #6']]};
+const TODAY=new Date(2026,10,2);
+let S={variant:new URLSearchParams(location.search).get('variant')||'A',lens:null,view:'home',topicPage:null,sheet:null,askLog:[],attach:null,scout:{done:{}},notice:null,studio:'calendar'};
+const botOf=it=>TOPICS[it.topic]?.bot;
+const vis=()=>ITEMS.filter(it=>it.status==='open'&&(!S.lens||botOf(it)===S.lens));
+const fmt=d=>{if(!d)return'';const x=new Date(d+'T00:00');return x.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})};
+const pathOf=t=>{const tp=TOPICS[t];return tp.parent?[tp.parent,t]:[t]};
+const priLabel={hi:'High',md:'Medium',lo:'Low'};
+const needs=()=>{const n=[];ITEMS.filter(i=>i.status==='open'&&i.fuzzy&&!i.date).forEach(i=>n.push({k:'date',i}));ITEMS.filter(i=>i.status==='needs').forEach(i=>n.push({k:'area',i}));ITEMS.filter(i=>i.status==='open'&&i.id===3&&!i.date).forEach(i=>n.push({k:'nodate',i}));if(!S.statDone)n.push({k:'topic'});return n};
+const scoutQs=[{id:3,q:'Halloween was on 31 Oct. Still need to talk to Admin about the budget?'},{id:6,q:'You saved the butter chicken recipe 2 days ago. Still planning to make it?'}];
+
+// ---------------------------------------------------------------- shared pieces
+function datePill(it){if(it.date)return `<button class="chip" data-act="date" data-id="${it.id}" title="${it.conf==='you'?'Confirmed by you':'From your note'}">${ic('calendar',12)} ${fmt(it.date)}${it.time?' · '+it.time:''}${it.conf==='you'?' ✓':''}</button>`;
+ if(it.sug)return `<button class="chip dash" data-act="date" data-id="${it.id}">${ic('calendar',12)} ${fmt(it.sug)}? confirm</button>`;
+ return `<button class="chip" data-act="date" data-id="${it.id}" style="background:var(--amber-soft);color:var(--amber)">No date · set</button>`}
+function crumb(it){return pathOf(it.topic).map(t=>`<button class="link mut" data-act="topic" data-t="${t}">${esc(t)}</button>`).join(' <span class="mut">›</span> ')}
+function itemRow(it){return `<div class="row"><span class="bico" style="width:26px;height:26px;background:${BOTS[botOf(it)].c};color:${BOTS[botOf(it)].fg}">${ic(BOTS[botOf(it)].i,14)}</span>
+ <div style="flex:1;min-width:0"><button class="link" data-act="open" data-id="${it.id}">${esc(it.title)}</button><div style="margin-top:2px">${crumb(it)}</div></div>${datePill(it)}<span class="pri p-${it.pri}">${priLabel[it.pri]}</span></div>`}
+function composer(big){return `<div class="glass compose">
+ <textarea id="noteText" maxlength="2000" placeholder="Write a note, or attach a link or file and say why you're saving it…" ${big?'style="min-height:110px"':''}></textarea>
+ ${S.attach?`<div class="attchip">${ic('link',14)} <b>${S.attach.kind}</b> ${esc(S.attach.label)} <button class="link" data-act="unattach">${ic('x',14)}</button></div>`:''}
+ <div class="att"><button class="attb" data-act="attach" data-k="Link">+ Link</button><button class="attb" data-act="attach" data-k="PDF">+ PDF</button><button class="attb" data-act="attach" data-k="Image">+ Image</button><button class="attb" data-act="attach" data-k="Audio">+ Audio</button>
+ <span style="flex:1"></span><span class="mut" id="cc">0 / 2000</span><button class="btn" data-act="add">${S.attach?'Add '+S.attach.kind.toLowerCase()+' with note':'Add note'}</button></div></div>`}
+function lensChip(){return S.lens?`<span class="lens">Viewing: ${BOTS[S.lens].n} <button data-act="lens" data-b="" aria-label="Show everything">×</button></span>`:`<span class="mut">Showing everything</span>`}
+function botsList(){const items=[['captain','Captain','crown','#efeafd','#463a7c',needs().length],['scout','Scout','scout','#dff1f5','#1f6170',scoutQs.filter(q=>!S.scout.done[q.id]).length]];
+ return `<div class="sec">Your crew</div>${items.map(b=>`<button class="bot ${(b[0]==='captain'&&S.view==='home'&&!S.lens)||(S.view==='scout'&&b[0]==='scout')?'on':''}" data-act="${b[0]}"><span class="bico" style="background:${b[3]};color:${b[4]}">${ic(b[2])}</span><span><b style="font-weight:600">${b[1]}</b><div class="mut">${b[0]==='captain'?'Sees everything':'Weekly catch-up'}</div></span>${b[5]?`<span class="badge">${b[5]}</span>`:''}</button>`).join('')}
+ <div class="sec">Life bots</div>${Object.entries(BOTS).map(([k,b])=>{const n=ITEMS.filter(i=>i.status==='open'&&botOf(i)===k).length;return `<button class="bot ${S.lens===k?'on':''}" data-act="lens" data-b="${k}"><span class="bico" style="background:${b.c};color:${b.fg}">${ic(b.i)}</span><span>${b.n}</span>${n?`<span class="badge" style="background:var(--lav);color:var(--lav-deeper)">${n}</span>`:''}</button>`}).join('')}`}
+const FEATS=[['topics','Topics and spaces','topics'],['timeline','Timeline','timeline'],['calendar','Calendar','calendar'],['priority','Priority','flag'],['dashboard','Dashboard','dash'],['ask','Ask me','ask']];
+function featNav(compact){return FEATS.map(f=>`<button class="nav ${S.view===f[0]?'on':''}" data-act="view" data-v="${f[0]}">${ic(f[2])}${compact?'':f[1]}</button>`).join('')}
+
+// ---------------------------------------------------------------- views
+function vCaptain(){const n=needs();const open=vis();const hi=open.filter(i=>i.pri==='hi');
+ return `<div class="glass" style="padding:18px 20px"><div style="display:flex;align-items:center;gap:10px"><span class="bico" style="background:#efeafd;color:#463a7c">${ic('crown')}</span><h2 class="h2">Good evening. Here's your life today.</h2></div>
+ <p style="line-height:1.65;margin:10px 0 0">Your <b>Python quiz is tomorrow at 11:00</b>, the most urgent thing. ${hi.length} high-priority items are open, and ${n.length} things need a quick answer from you.</p>
+ <div class="sec" style="margin-left:0">Needs you</div>${n.map(needCard).join('')||'<div class="mut">Nothing needs you. Enjoy your evening.</div>'}
+ <div class="sec" style="margin-left:0">Today's focus</div>${open.filter(i=>i.pri==='hi').slice(0,3).map(itemRow).join('')}</div>`}
+function areaButtons(it){return it.choices?it.choices.map(t=>`<button class="btn2" data-act="area" data-id="${it.id}" data-t="${esc(t)}" title="${esc(BOTS[TOPICS[t].bot].n)}">${esc(t)}</button>`).join(' '):Object.entries(BOTS).map(([k,b])=>`<button class="chip" data-act="areabot" data-id="${it.id}" data-b="${k}" style="background:${b.c};color:${b.fg};margin:0 4px 4px 0">${esc(b.n)}</button>`).join('')}
+function needCard(x){if(x.k==='area')return `<div class="need"><div><b style="font-weight:600">${esc(x.i.title)}</b> <span class="mut">· ${esc(x.i.hint||'not sure where it goes')}</span></div><div class="mut" style="margin:4px 0 8px">${x.i.choices?'Two areas fit equally, so Captain won\'t guess. Which is it?':'Captain couldn\'t tell which area this belongs to. Pick one:'}</div>${areaButtons(x.i)}</div>`;
+ if(x.k==='date')return `<div class="need warn"><div><b style="font-weight:600">${esc(x.i.title)}</b> <span class="mut">· you wrote "${esc(x.i.fuzzy)}"</span></div><div class="mut" style="margin:4px 0 8px">Which day exactly? Captain suggests ${fmt(x.i.sug)}.</div><button class="btn2" data-act="date" data-id="${x.i.id}">${ic('calendar',14)} Set date</button></div>`;
+ if(x.k==='nodate')return `<div class="need"><div><b style="font-weight:600">${esc(x.i.title)}</b> has no date</div><div class="mut" style="margin:4px 0 8px">Halloween is over. Keep it with a date, or drop it?</div><button class="btn2" data-act="date" data-id="3">Set date</button> <button class="btn2" data-act="dropit" data-id="3">Drop it</button></div>`;
+ return `<div class="need"><div>${ic('spark',14)} <b style="font-weight:600">Learning &amp; work bot suggests: Statistics, under Study</b></div><div class="mut" style="margin:4px 0 8px">Based on your Hypothesis Testing PDF and your note "practice for Statistics".</div><button class="btn2" data-act="mkstat">Create it</button> <button class="btn2" data-act="nostat">Not now</button></div>`}
+function vTopics(){if(S.topicPage)return vTopicPage(S.topicPage);
+ const groups=Object.entries(BOTS).filter(([k])=>!S.lens||k===S.lens);const total=ITEMS.filter(i=>i.status==='open').length;
+ const count=t=>ITEMS.filter(i=>i.status==='open'&&(i.topic===t||TOPICS[i.topic].parent===t)).length;
+ const groupHtml=([k,b])=>{const mains=b.topics.filter(t=>!TOPICS[t].parent).sort((x,y)=>count(y)-count(x));const n=ITEMS.filter(i=>i.status==='open'&&botOf(i)===k).length;
+  return `<div class="card group"><div class="cardHead"><span class="bico" style="background:${b.c};color:${b.fg}">${ic(b.i)}</span><div><h2 class="h2">${b.n}</h2><div class="mut">${n} item${n===1?'':'s'}</div></div></div>
+  ${mains.map(t=>{const subs=Object.keys(TOPICS).filter(s=>TOPICS[s].parent===t);const c=count(t);
+   return `<button class="trow ${c?'':'empty'}" data-act="topic" data-t="${t}"><div style="min-width:0"><div>${esc(t)}</div><div class="mut" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(TOPICS[t].d)}</div></div><span class="count">${c}</span></button>
+   ${subs.map(s=>`<button class="trow sub ${ITEMS.some(i=>i.status==='open'&&i.topic===s)?'':'empty'}" data-act="topic" data-t="${s}">↳ ${esc(s)}<span class="mut" style="margin-left:auto">${ITEMS.filter(i=>i.status==='open'&&i.topic===s).length}</span></button>`).join('')}`}).join('')}</div>`};
+ const ordered=[...groups].sort((a,b)=>ITEMS.filter(i=>i.status==='open'&&botOf(i)===b[0]).length-ITEMS.filter(i=>i.status==='open'&&botOf(i)===a[0]).length);
+ return `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px"><h2 class="h2">Topics and spaces</h2><span class="mut">${total} items in ${Object.keys(TOPICS).length} topics · busiest areas first${ITEMS.some(i=>i.status==='needs')?` · ${ITEMS.filter(i=>i.status==='needs').length} waiting in Needs you`:''}</span><button class="btn2" data-act="toast" data-m="Prototype: opens the name + description form with the subtopic suggestion. Each area starts with 3 topics; add as many as you like." style="margin-left:auto">+ New topic</button></div>
+ <div class="masonry">${ordered.map(groupHtml).join('')}<div class="card group ghost"><div class="cardHead">${ic('spark')}<h2 class="h2">Add your own topic</h2></div><div class="mut" style="line-height:1.5">Every area starts with 3 topics. Add as many topics and subtopics as you like, such as Study › Python.</div><button class="btn2" data-act="toast" data-m="Prototype: opens the name + description form with the subtopic suggestion" style="margin-top:10px">+ New topic</button></div></div>`}
+function vTopicPage(t){const subs=Object.keys(TOPICS).filter(s=>TOPICS[s].parent===t);const its=ITEMS.filter(i=>i.status==='open'&&(i.topic===t||TOPICS[i.topic].parent===t));const b=BOTS[TOPICS[t].bot];
+ return `<button class="link mut" data-act="topicsback">${ic('back',14)} All topics</button>
+ <div class="mut" style="margin-top:10px">${b.n} bot › ${pathOf(t).map(x=>`<button class="link mut" data-act="topic" data-t="${x}">${esc(x)}</button>`).join(' › ')}</div>
+ <h2 class="h1" style="margin:4px 0">${esc(t)}</h2><p class="mut" style="margin:0 0 10px">${esc(TOPICS[t].d)} · ${its.length} items</p>
+ ${subs.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${subs.map(s=>`<button class="chip" data-act="topic" data-t="${s}">${esc(s)} · ${ITEMS.filter(i=>i.status==='open'&&i.topic===s).length}</button>`).join('')}</div>`:''}
+ ${its.map(itemRow).join('')||'<p class="mut">Nothing here yet. Notes about this land here automatically.</p>'}`}
+function weekDays(){return [...Array(7)].map((_,k)=>`2026-11-${String(2+k).padStart(2,'0')}`)}
+function vTimeline(){const days=weekDays();const its=vis();const undated=its.filter(i=>!i.date).length;
+ return `<h2 class="h2">Timeline · this week</h2><p class="mut">How heavy is your week? Spikes show what's due. Undated: ${undated} · <button class="link mut" data-act="captain" style="text-decoration:underline">sort them with Captain</button></p>
+ <div style="position:relative;height:170px;margin:16px 6px 0"><div style="position:absolute;left:0;right:0;top:120px;border-top:2px solid var(--lav-mid)"></div>
+ ${days.map((d,k)=>{const due=its.filter(i=>i.date===d||(!i.date&&i.sug===d));const x=(k+.5)/7*100;const isT=d==='2026-11-02';
+ return `<div style="position:absolute;left:calc(${x}% - 30px);width:60px;top:0;height:120px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">${due.map(i=>`<button data-act="open" data-id="${i.id}" title="${esc(i.title)}" style="width:22px;height:${i.pri==='hi'?54:34}px;border:0;border-radius:8px 8px 3px 3px;background:${i.date?BOTS[botOf(i)].fg:'transparent'};outline:${i.date?'none':'2px dashed '+BOTS[botOf(i)].fg}"></button>`).join('')}</div>
+ <div style="position:absolute;left:calc(${x}% - 30px);width:60px;top:128px;text-align:center;font-size:12px;${isT?'color:var(--lav-deep);font-weight:700':'color:var(--ink-soft)'}">${fmt(d).split(' ').slice(0,2).join(' ')}${isT?'<br>today':''}</div>`}).join('')}</div>
+ <div class="sec" style="margin-left:0">Due this week</div>${its.filter(i=>days.includes(i.date)||days.includes(!i.date&&i.sug)).map(itemRow).join('')||'<p class="mut">Nothing dated this week.</p>'}`}
+function vCalendar(){let g='';['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=>g+=`<div class="mut" style="text-align:center">${d}</div>`);g+='<div></div>'.repeat(6);const its=vis();
+ for(let d=1;d<=30;d++){const ds=`2026-11-${String(d).padStart(2,'0')}`;const on=its.filter(i=>i.date===ds||(!i.date&&i.sug===ds));g+=`<button class="day ${d===2?'today':''}" data-act="day" data-d="${ds}"><b style="font-weight:600">${d}</b><br>${on.map(i=>`<span class="dot" style="background:${BOTS[botOf(i)].fg};${i.date?'':'background:transparent;outline:1.5px dashed '+BOTS[botOf(i)].fg}"></span>`).join('')}</button>`}
+ return `<h2 class="h2">November 2026</h2><p class="mut">Solid dot = date confirmed · dashed = suggested. Click a day.</p><div class="cal" style="position:relative">${g}</div><div id="daypop"></div>`}
+function vPriority(){const c=p=>vis().filter(i=>i.pri===p).map(i=>`<button class="tcard" data-act="open" data-id="${i.id}"><div>${esc(i.title)}</div><div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap"><span class="chip" style="background:${BOTS[botOf(i)].c};color:${BOTS[botOf(i)].fg}">${BOTS[botOf(i)].n}</span><span class="mut">${i.date?fmt(i.date):'No date'}</span></div><div class="mut" style="margin-top:4px">Why: ${esc(i.why)}</div></button>`).join('')||'<p class="mut">Nothing</p>';
+ return `<h2 class="h2">Priority</h2><p class="mut">Today and the next few first. Drag a card to another column to change it (prototype: click opens).</p><div class="cols"><div class="col"><span class="pri p-hi">High</span>${c('hi')}</div><div class="col"><span class="pri p-md">Medium</span>${c('md')}</div><div class="col"><span class="pri p-lo">Low</span>${c('lo')}</div></div>`}
+function vDashboard(){const per=Object.entries(BOTS).map(([k,b])=>[b.n,ITEMS.filter(i=>botOf(i)===k).length]);const max=Math.max(...per.map(p=>p[1]),1);const quiet=per.filter(p=>!p[1]).map(p=>p[0]);const top=[...per].sort((a,b)=>b[1]-a[1])[0];
+ return `<h2 class="h2">Your life at a glance</h2><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px"><div class="metric"><span class="mut">Captured this week</span><b>${ITEMS.length}</b></div><div class="metric"><span class="mut">Tasks done</span><b>${ITEMS.filter(i=>i.status==='done').length} of ${ITEMS.length}</b></div><div class="metric"><span class="mut">Busiest day</span><b>Sat</b></div></div>
+ <div class="sec" style="margin-left:0">Where your attention went</div>${per.map(p=>`<div style="display:flex;align-items:center;gap:10px;margin:7px 0"><span style="width:150px">${p[0]}</span><div class="bar" style="flex:1"><span style="width:${p[1]/max*100}%"></span></div><span class="mut">${p[1]}</span></div>`).join('')}
+ <div class="sec" style="margin-left:0">Captain noticed</div><div class="row">${ic('spark',14)} You saved 2 recipes; one is planned for Saturday.</div>${quiet.length?`<div class="row">${ic('spark',14)} ${quiet.join(' and ')} ${quiet.length>1?'have':'has'} been quiet for 2 weeks.</div>`:''}<div class="row">${ic('spark',14)} ${top[0]} is your busiest area: ${top[1]} of ${ITEMS.length} notes.</div>`}
+function vBot(k){const b=BOTS[k];const its=vis();const mem=MEMORY[k];
+ const summ={learn:'Python quiz tomorrow at 11:00 is your most urgent item. Statistics practice and the Halloween budget talk are waiting without dates.',money:'One subscription to cancel: Netflix on 15 Dec. Bills, documents and home errands collect here.',health:'No health items yet. Pill reminder is set up but empty.',people:'Date night on Saturday: white sauce pasta (date not confirmed).',fun:'Butter chicken is saved for someday. No trips planned yet.'}[k];
+ return `<div style="display:flex;align-items:center;gap:10px"><span class="bico" style="background:${b.c};color:${b.fg};width:40px;height:40px">${ic(b.i,22)}</span><div><h2 class="h1">${b.n} bot</h2><div class="mut">Looks after: ${b.topics.filter(t=>!TOPICS[t].parent).join(' · ')}</div></div></div>
+ <p style="line-height:1.65">${summ}</p><div class="sec" style="margin-left:0">What you need to do</div>${its.map(itemRow).join('')||'<p class="mut">Nothing to do here right now.</p>'}
+ <div class="sec" style="margin-left:0">What I learned about you</div>${k==='health'?`<div class="need">Health memory is off. Health details are sensitive, so this bot only remembers them if you allow it. <div style="margin-top:8px"><button class="btn2" data-act="toast" data-m="Prototype: would ask for explicit consent">Allow health memory</button></div></div>`:(mem.map(m=>`<div class="row"><span style="flex:1">${esc(m[0])}</span><span class="mut">from ${m[1]}</span><button class="link mut" data-act="toast" data-m="Prototype: edit or delete this memory">Edit</button></div>`).join('')||'<p class="mut">Nothing learned yet.</p>')}
+ <div class="mut" style="margin-top:12px">Tip: with this bot selected, every left-panel view shows only ${b.n.toLowerCase()} items.</div>`}
+function vScout(){const qs=scoutQs.filter(q=>ITEMS.find(i=>i.id===q.id).status==='open'||S.scout.done[q.id]);
+ return `<div style="display:flex;align-items:center;gap:10px"><span class="bico" style="background:#dff1f5;color:#1f6170;width:40px;height:40px">${ic('scout',22)}</span><div><h2 class="h1">Scout catch-up</h2><div class="mut">A minute to keep your inbox honest. Your answers update the bots' memory.</div></div></div>
+ ${qs.map(q=>{const it=ITEMS.find(i=>i.id===q.id);const d=S.scout.done[q.id];return `<div class="need">${esc(q.q)}<div style="margin-top:4px">${crumb(it)}</div>${d?`<div style="margin-top:8px;color:var(--green)">${d}</div>`:`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn2" data-act="scout" data-id="${q.id}" data-a="done">Done</button><button class="btn2" data-act="scout" data-id="${q.id}" data-a="later">Not yet, new date</button><button class="btn2" data-act="scout" data-id="${q.id}" data-a="drop">Drop it</button></div>`}</div>`}).join('')}
+ ${S.notice?`<div class="how" style="margin-top:12px">${S.notice}</div>`:''}`}
+// ---------------------------------------------------------------- Ask me
+const ASK_SUG=['What do I have this week?','What am I cooking for my date?','Which video is for Python?','What did I save about money?'];
+function answer(q){const t=q.toLowerCase();const lens=S.lens;const its=vis();const cite=i=>`<button class="cite" data-act="open" data-id="${i.id}">#${i.id}</button>`;
+ const how=(bots,mem,notes)=>`<div class="how">How I answered: Captain asked <b>${bots}</b> · used ${mem} memory facts · read notes ${notes.map(i=>'#'+i.id).join(', ')||'none'} · answer uses only your notes</div>`;
+ if(/week|this week|upcoming|due/.test(t)){const days=weekDays();const w=its.filter(i=>days.includes(i.date)||days.includes(!i.date&&i.sug));
+  if(!w.length)return {a:`Nothing is dated this week${lens?' in '+BOTS[lens].n:''}. ${its.find(i=>i.date)?`Next up: ${esc(its.find(i=>i.date).title)} on ${fmt(its.find(i=>i.date).date)} ${cite(its.find(i=>i.date))}.`:''}`,h:how(lens?BOTS[lens].n:'all bots',2,[])};
+  return {a:w.map(i=>`${esc(i.title)}: ${i.date?fmt(i.date)+(i.time?' at '+i.time:''):'probably '+fmt(i.sug)+' (you wrote "'+esc(i.fuzzy)+'", not confirmed yet)'} ${cite(i)}`).join('<br>')+(w.some(i=>!i.date)?`<div style="margin-top:8px"><button class="btn2" data-act="date" data-id="2">Confirm Saturday's date</button></div>`:''),h:how(lens?BOTS[lens].n:[...new Set(w.map(i=>BOTS[botOf(i)].n))].join(', '),3,w)}}
+ if(/cook|date|recipe|pasta/.test(t)){const p=ITEMS.find(i=>i.id===2),bc=ITEMS.find(i=>i.id===6);if(lens&&lens!=='people'&&lens!=='fun')return {a:`I only looked in ${BOTS[lens].n} because that bot is selected, and there's nothing about cooking there. Clear the lens to search everything.`,h:how(BOTS[lens].n,0,[])};
+  if(lens==='fun')return {a:`In Fun & interests: a butter chicken recipe saved for someday ${cite(bc)}. Your date-night pasta is filed under People, because your note says it's for a date. Clear the lens to see both.`,h:how(BOTS.fun.n,1,[bc])};
+  return {a:`White sauce pasta ${cite(p)}. You saved a Kabita's Kitchen video and wrote that it's for your date on coming Saturday. ${p.date?'Date confirmed: '+fmt(p.date)+'.':'The date isn\'t confirmed yet.'}${lens?'':` You also saved a butter chicken recipe for someday ${cite(bc)}.`}`,h:how(lens?BOTS[lens].n:'People, Fun & interests',2,lens?[p]:[p,bc])}}
+ if(/python/.test(t)){const v=ITEMS.find(i=>i.id===7);return {a:`None of your saved videos is marked as being for Python. The closest is the Nemotron AI coding agent video ${cite(v)}, but you didn't add a note linking it to Python, so I won't assume it.${v.status==='needs'?' It\'s waiting in Needs you for you to pick its area.':''} Your Python item is the quiz tomorrow at 11:00 ${cite(ITEMS.find(i=>i.id===1))}.`,h:how('Learning & work',2,[v,ITEMS.find(i=>i.id===1)])}}
+ if(/money|bill|netflix|subscri/.test(t)){const n=ITEMS.find(i=>i.id===5);return {a:`One money item: cancel Netflix on ${fmt(n.date)} ${cite(n)}. The Money & home bot remembers you track subscriptions to cancel, so it will remind you a few days before.`,h:how('Money & home',1,[n])}}
+ return {a:`I couldn't find that in your notes, so I won't guess. Try asking about your week, a topic, or a date.`,h:how(lens?BOTS[lens].n:'all bots',0,[])}}
+function vAsk(){return `<h2 class="h2">Ask me</h2><p class="mut">Answers come only from your notes and memory, with links to the notes they used. ${S.lens?'Answering from '+BOTS[S.lens].n+' only.':'Answering from everything.'}</p>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${ASK_SUG.map(s=>`<button class="chip" data-act="ask" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+ <div style="display:flex;flex-direction:column;gap:10px;margin:12px 0">${S.askLog.map(m=>m.me?`<div class="bubble b-me">${esc(m.me)}</div>`:`<div class="bubble b-ai">${m.a}${m.h}</div>`).join('')||'<p class="mut">Ask anything about your inbox.</p>'}</div>
+ <div style="display:flex;gap:8px"><input id="askIn" placeholder="What did I plan for Saturday?" style="flex:1;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit;background:#fff"><button class="btn" data-act="askgo">Ask</button></div>`}
+function viewHtml(v){if(S.lens&&v==='home')return vBot(S.lens);return {home:vCaptain,topics:vTopics,timeline:vTimeline,calendar:vCalendar,priority:vPriority,dashboard:vDashboard,ask:vAsk,scout:vScout}[v]()}
+// ---------------------------------------------------------------- item sheet (shared)
+function itemSheet(id){const it=ITEMS.find(i=>i.id===id);const b=BOTS[botOf(it)];const rel=b?ITEMS.filter(i=>i.id!==id&&i.status==='open'&&(i.topic===it.topic||TOPICS[i.topic].parent===it.topic||TOPICS[it.topic].parent===i.topic)):[];
+ return `<div class="sheet-bg" data-act="close"><div class="sheet" data-stop="1"><button class="link mut" data-act="close">${ic('x',14)} Close</button>
+ <div class="mut" style="margin-top:12px">${b?`${b.n} bot › ${crumb(it)}`:'Not filed yet · Captain is asking you where it goes'}</div><h2 class="h1" style="margin:6px 0">${esc(it.title)}</h2>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${datePill(it)}<span class="pri p-${it.pri}">${priLabel[it.pri]}</span><span class="chip">${it.type}</span></div>
+ ${it.note?`<div class="sec" style="margin-left:0">Your note</div><div style="line-height:1.6">${esc(it.note)}</div>`:''}
+ <div class="sec" style="margin-left:0">Source</div><div class="mut" style="line-height:1.6">${esc(it.src)}</div>
+ <div class="sec" style="margin-left:0">Why it's here</div><div class="mut">${esc(it.why)}${b?' · filed by '+b.n+' bot':''}</div>${it.rule?`<div class="how">Rule ${esc(it.rule)}</div>`:''}${it.status==='needs'?`<div style="margin-top:10px">${areaButtons(it)}</div>`:''}
+ <div class="sec" style="margin-left:0">Related</div>${rel.map(itemRow).join('')||'<p class="mut">Nothing related yet.</p>'}
+ <div style="display:flex;gap:8px;margin-top:16px"><button class="btn2" data-act="markdone" data-id="${id}">Mark done</button><button class="btn2" data-act="toast" data-m="Prototype: move to another topic">Move to topic</button></div></div></div>`}
+// ---------------------------------------------------------------- date picker (shared)
+function datePop(id,anchor){const it=ITEMS.find(i=>i.id===id);const pick=it.date||it.sug||'2026-11-02';S.pick={id,day:+pick.slice(8),time:it.time||''};
+ const r=anchor.getBoundingClientRect();const pop=document.createElement('div');pop.className='pop';pop.id='pop';pop.style.top=(window.scrollY+r.bottom+6)+'px';pop.style.left=Math.max(10,Math.min(window.innerWidth-310,r.left))+'px';
+ pop.innerHTML=popInner(it);document.body.appendChild(pop);bindPop()}
+function popInner(it){let g=['M','T','W','T','F','S','S'].map(d=>`<span class="mut">${d}</span>`).join('')+'<span></span>'.repeat(6);const sug=it.sug?+it.sug.slice(8):null;
+ for(let d=1;d<=30;d++)g+=`<button class="${d===S.pick.day?'sel':''} ${d===sug?'sug':''}" data-act="pday" data-d="${d}">${d}</button>`;
+ return `<div style="display:flex;justify-content:space-between"><b style="font-weight:600">${esc(it.title)}</b><button class="link" data-act="pclose">${ic('x',14)}</button></div>${it.fuzzy?`<div class="mut">You wrote "${esc(it.fuzzy)}" · suggested: ${fmt(it.sug)}</div>`:''}
+ <div class="mut" style="margin-top:6px">November 2026</div><div class="pcal">${g}</div>
+ <label class="mut" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="pt" ${S.pick.time?'checked':''}> Add a time</label><input type="time" id="ptime" value="${S.pick.time||'19:30'}" ${S.pick.time?'':'hidden'} style="margin-top:6px;border:1.5px solid var(--line);border-radius:10px;padding:6px 8px">
+ <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" data-act="psave">Save date</button><button class="btn2" data-act="pclose">Cancel</button></div>`}
+// ---------------------------------------------------------------- layouts
+function header(){return `<header class="top"><div class="wm">${logo()}<span><i>Life</i> Inbox</span></div><span style="margin-left:18px">${lensChip()}</span><div class="av" title="Signed in">A</div></header>`}
+function logo(){return `<svg width="34" height="34" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8fd3dd"/><stop offset=".55" stop-color="#7a68b5"/><stop offset="1" stop-color="#463a7c"/></linearGradient></defs><rect x="2" y="6" width="56" height="56" rx="16" fill="url(#lf)"/><path d="M14 36h10l3 6h10l3-6h10v10a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4z" fill="#fff"/><path d="M18 22h24M18 29h16" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity=".8"/><circle cx="54" cy="10" r="8" fill="#c8414d" stroke="#f3eefb" stroke-width="3"/></svg>`}
+function botStatus(k){const its=ITEMS.filter(i=>i.status==='open'&&botOf(i)===k);const dated=its.filter(i=>i.date||i.sug).sort((a,b)=>(a.date||a.sug).localeCompare(b.date||b.sug));
+ if(dated.length){const i=dated[0];return `${i.title.split(' ').slice(0,3).join(' ')} · ${fmt(i.date||i.sug).split(' ').slice(0,2).join(' ')}${i.time?' '+i.time:''}${i.date?'':'?'}`}
+ return its.length?`${its.length} open, no dates`:'Nothing yet'}
+function leftPaneA(){const pins=Object.keys(TOPICS).map(t=>[t,ITEMS.filter(i=>i.status==='open'&&i.topic===t).length]).filter(x=>x[1]).sort((a,b)=>b[1]-a[1]).slice(0,5);
+ return `<aside class="glass paneA"><button class="nav ${S.view==='home'&&!S.lens?'on':''}" data-act="captain">${ic('home')}Home</button>${featNav()}
+ <div class="sec">Pinned topics</div>${pins.map(([t,n])=>`<button class="trow" data-act="topic" data-t="${t}"><span class="dot" style="margin:0;background:${BOTS[TOPICS[t].bot].fg}"></span>${esc(t)}<span class="mut" style="margin-left:auto">${n}</span></button>`).join('')}
+ <div class="paneFoot"><div style="display:flex;align-items:center;gap:10px"><div class="av" style="margin:0;width:30px;height:30px">A</div><div><div style="font-weight:600;font-size:13px">Alex</div><div class="mut">Signed in · Settings</div></div></div></div></aside>`}
+function rightPaneA(){const n=needs().length;const sc=scoutQs.filter(q=>!S.scout.done[q.id]).length;
+ return `<aside class="glass paneA"><div class="sec" style="margin-top:2px">Your crew</div>
+ <button class="bot ${S.view==='home'&&!S.lens?'on':''}" data-act="captain"><span class="bico" style="background:#efeafd;color:#463a7c">${ic('crown')}</span><span style="min-width:0"><b style="font-weight:600">Captain</b><div class="botline">${n?n+' things need you':'All clear'}</div></span>${n?`<span class="badge">${n}</span>`:''}</button>
+ <button class="bot ${S.view==='scout'?'on':''}" data-act="scout"><span class="bico" style="background:#dff1f5;color:#1f6170">${ic('scout')}</span><span style="min-width:0"><b style="font-weight:600">Scout</b><div class="botline">${sc?sc+' catch-up questions':'Caught up'}</div></span>${sc?`<span class="badge">${sc}</span>`:''}</button>
+ <div class="sec">Life bots</div>${Object.entries(BOTS).map(([k,b])=>`<button class="bot ${S.lens===k?'on':''}" data-act="lens" data-b="${k}"><span class="bico" style="background:${b.c};color:${b.fg}">${ic(b.i)}</span><span style="min-width:0"><b style="font-weight:500">${b.n}</b><div class="botline">${esc(botStatus(k))}</div></span></button>`).join('')}
+ <div class="paneFoot"><div class="mut" style="line-height:1.5">${ic('spark',13)} Select a bot to see every feature through its eyes. Click it again, or the × on top, to see everything.</div></div></aside>`}
+function homeA(){const open=vis();const n=needs();const days=weekDays();const dated=open.filter(i=>i.date||i.sug).sort((a,b)=>(a.date||a.sug).localeCompare(b.date||b.sug));const recent=[...ITEMS].sort((a,b)=>b.id-a.id).slice(0,4);
+ const mx=Math.max(1,...days.map(d=>open.filter(i=>(i.date||i.sug)===d).length));
+ return `<div class="homeGrid">
+ <div class="card" style="grid-column:1/-1;min-width:0"><div class="cardHead"><span class="bico" style="background:#efeafd;color:#463a7c">${ic('crown')}</span><h2 class="h2">Good evening, Alex</h2>${n.length?`<span class="badge">${n.length} need you</span>`:''}</div>
+ <p style="line-height:1.6;margin:0 0 4px">Your <b>Python quiz is tomorrow at 11:00</b>, the most urgent thing today. ${open.filter(i=>i.pri==='hi').length} high-priority items are open.</p>
+ <div class="needs">${n.map(needCard).join('')||'<div class="mut">Nothing needs you. Enjoy your evening.</div>'}</div></div>
+ <div class="card"><div class="cardHead">${ic('timeline')}<h2 class="h2">This week</h2><button class="link mut" data-act="view" data-v="timeline" style="margin-left:auto">Open timeline ›</button></div>
+ <div class="spark">${days.map(d=>{const its=open.filter(i=>(i.date||i.sug)===d);return `<div title="${its.map(i=>esc(i.title)).join(', ')}"><span class="b" style="height:${its.length?Math.max(16,its.length/mx*58):4}px;background:${its.length?(its[0].date?BOTS[botOf(its[0])].fg:'transparent'):'rgba(201,184,236,.55)'};${its.length&&!its[0].date?'outline:2px dashed '+BOTS[botOf(its[0])].fg:''}"></span><span class="mut" style="${d==='2026-11-02'?'color:var(--lav-deep);font-weight:700':''}">${fmt(d).split(' ')[0]}</span></div>`}).join('')}</div>
+ <div class="sec" style="margin-left:0">Next up</div>${dated.slice(0,3).map(i=>`<div class="mini"><span class="mut" style="width:74px">${fmt(i.date||i.sug).split(' ').slice(0,2).join(' ')}${i.date?'':'?'}</span><button class="link" data-act="open" data-id="${i.id}" style="flex:1">${esc(i.title)}</button></div>`).join('')||'<div class="mut">No dates yet.</div>'}</div>
+ <div class="card"><div class="cardHead">${ic('flag')}<h2 class="h2">Today's focus</h2><button class="link mut" data-act="view" data-v="priority" style="margin-left:auto">All priorities ›</button></div>
+ ${open.filter(i=>i.pri==='hi').slice(0,3).map(i=>`<div class="mini" style="align-items:flex-start"><span class="pri p-${i.pri}" style="margin-top:2px">${priLabel[i.pri]}</span><div style="flex:1;min-width:0"><button class="link" data-act="open" data-id="${i.id}">${esc(i.title)}</button><div style="margin-top:4px">${datePill(i)}</div></div></div>`).join('')}
+ <div class="mut" style="margin-top:8px">${open.filter(i=>i.pri!=='hi').length} more waiting · Captain keeps this list to 3.</div></div>
+ <div class="card"><div class="cardHead">${ic('topics')}<h2 class="h2">Recently captured</h2><button class="link mut" data-act="view" data-v="topics" style="margin-left:auto">All topics ›</button></div>
+ ${recent.map(i=>`<div class="mini"><span class="chip">${i.type}</span><button class="link" data-act="open" data-id="${i.id}" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(i.title)}</button>${i.topic?`<button class="link mut" data-act="topic" data-t="${i.topic}">${esc(i.topic)}</button>`:'<button class="link mut" data-act="captain" style="color:var(--amber)">Needs you</button>'}</div>`).join('')}</div>
+ </div>`}
+function layoutA(){const body=S.view==='home'&&!S.lens?homeA():(S.view==='topics'&&!S.topicPage?vTopics():`<div class="glass" style="padding:18px 20px">${viewHtml(S.view)}</div>`);
+ return `<div class="shellA">${header()}<main class="A">${leftPaneA()}<section class="centerA">${composer()}${body}</section>${rightPaneA()}</main></div>`}
+function layoutB(){const studio=S.lens?vBot(S.lens):viewHtml(S.studio);
+ return `${header()}<main class="B"><aside class="glass" style="padding:10px;height:fit-content;position:sticky;top:12px">${FEATS.map(f=>`<button class="nav ${S.studio===f[0]&&!S.lens?'on':''}" data-act="studio" data-v="${f[0]}">${ic(f[2])}${f[1]}</button>`).join('')}<div style="border-top:1px solid var(--line);margin:8px 0"></div>${botsList()}</aside>
+ <section class="glass" style="padding:18px 20px;display:flex;flex-direction:column;min-height:78vh"><div style="display:flex;align-items:center;gap:10px"><span class="bico" style="background:#efeafd;color:#463a7c">${ic('crown')}</span><h2 class="h2">Captain</h2><span class="mut">· your conversation with your inbox</span></div>
+ <div style="flex:1;display:flex;flex-direction:column;gap:12px;margin:14px 0">
+ <div class="bubble b-ai">Good evening. Your Python quiz is tomorrow at 11:00. ${needs().length} things need a quick answer.${needs().map(needCard).join('')}</div>
+ <div class="bubble b-me">I want to make White Sauce Pasta for my Date on coming saturdy. <div class="mut" style="color:#e6e0ff">+ youtube.com link</div></div>
+ <div class="bubble b-ai">Saved to <button class="chip" data-act="topic" data-t="Occasions & gifts">People › Occasions & gifts</button> with a task, because you said it's for your date. ${datePill(ITEMS.find(i=>i.id===2))}</div>
+ ${S.askLog.map(m=>m.me?`<div class="bubble b-me">${esc(m.me)}</div>`:`<div class="bubble b-ai">${m.a}${m.h}</div>`).join('')}</div>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${ASK_SUG.map(s=>`<button class="chip" data-act="ask" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>${composer()}</section>
+ <aside class="glass" style="padding:18px 20px;height:fit-content;position:sticky;top:12px"><div class="mut" style="margin-bottom:8px">Studio</div>${studio}</aside></main>`}
+function layoutC(){const open=vis();const hi=open.filter(i=>i.pri==='hi').slice(0,3);const days=weekDays();
+ return `${header()}<main class="C"><nav class="rail">${FEATS.map(f=>`<button class="rbtn" data-act="sheetview" data-v="${f[0]}" title="${f[1]}">${ic(f[2],20)}</button>`).join('')}</nav>
+ <section style="display:flex;flex-direction:column;gap:16px"><div style="text-align:center;margin-top:8px"><h1 class="h1" style="font-size:34px">Everything on your mind, <i style="color:var(--lav-deep)">sorted.</i></h1></div>${composer(true)}
+ <div class="glass" style="padding:18px 20px"><div style="display:flex;align-items:center;gap:10px"><span class="bico" style="background:#efeafd;color:#463a7c">${ic('crown')}</span><h2 class="h2">Today with Captain</h2>${needs().length?`<button class="badge" data-act="sheetcaptain" style="border:0">${needs().length} need you</button>`:''}</div>
+ <p class="mut" style="margin:6px 0">Three things that matter most today:</p>${hi.map(itemRow).join('')}</div>
+ ${scoutQs.some(q=>!S.scout.done[q.id])?`<div class="glass" style="padding:14px 18px;display:flex;align-items:center;gap:12px"><span class="bico" style="background:#dff1f5;color:#1f6170">${ic('scout')}</span><div style="flex:1"><b style="font-weight:600">Scout has 2 quick questions</b><div class="mut">Keep your list honest in a minute.</div></div><button class="btn2" data-act="sheetscout">Catch up</button></div>`:''}
+ <div class="glass" style="padding:14px 18px"><div class="mut">This week</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:8px">${days.map(d=>{const n=open.filter(i=>i.date===d||(!i.date&&i.sug===d));return `<button class="day ${d==='2026-11-02'?'today':''}" data-act="day" data-d="${d}" style="min-height:58px"><b style="font-weight:600">${fmt(d).split(' ').slice(0,2).join(' ')}</b><br>${n.map(i=>`<span class="dot" style="background:${BOTS[botOf(i)].fg}"></span>`).join('')}</button>`}).join('')}</div><div id="daypop"></div></div></section>
+ <nav class="rail"><button class="rbtn" data-act="sheetcaptain" title="Captain">${ic('crown',20)}${needs().length?`<span class="badge">${needs().length}</span>`:''}</button><button class="rbtn" data-act="sheetscout" title="Scout">${ic('scout',20)}</button>${Object.entries(BOTS).map(([k,b])=>`<button class="rbtn ${S.lens===k?'on':''}" data-act="sheetbot" data-b="${k}" title="${b.n}" style="color:${b.fg}">${ic(b.i,20)}</button>`).join('')}</nav></main>`}
+// ---------------------------------------------------------------- render + events
+function render(){document.getElementById('app').innerHTML={A:layoutA,B:layoutB,C:layoutC}[S.variant]();document.getElementById('layer').innerHTML=S.sheet||'';
+ const names={A:'A · Three panes',B:'B · Captain conversation',C:'C · Today focus'};document.getElementById('proto').innerHTML=`<button data-act="vprev" aria-label="Previous variant">‹</button><span>PROTOTYPE · ${names[S.variant]}</span><button data-act="vnext" aria-label="Next variant">›</button>`;
+ const ta=document.getElementById('noteText');if(ta)ta.oninput=()=>{document.getElementById('cc').textContent=ta.value.length+' / 2000'};
+ const ai=document.getElementById('askIn');if(ai)ai.onkeydown=e=>{if(e.key==='Enter')ask(ai.value)};packMasonry()}
+function packMasonry(){document.querySelectorAll('.masonry').forEach(m=>{const gap=14,row=6;m.querySelectorAll('.group').forEach(g=>{g.style.gridRowEnd='auto';const h=g.getBoundingClientRect().height;g.style.gridRowEnd=`span ${Math.ceil((h+gap)/row)}`})})}
+window.addEventListener('resize',packMasonry);
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600)}
+function ask(q){q=(q||'').trim();if(!q){toast('Type a question first');return}const r=answer(q);S.askLog.push({me:q},r);if(S.variant==='A'||S.variant==='C'){S.view='ask'}if(S.variant==='C'){openSheet(vAsk())}render()}
+function openSheet(html){S.sheet=`<div class="sheet-bg" data-act="close"><div class="sheet" data-stop="1"><button class="link mut" data-act="close">${ic('x',14)} Close</button><div style="margin-top:12px">${html}</div></div></div>`}
+function setVariant(v){S.variant=v;S.sheet=null;const u=new URL(location);u.searchParams.set('variant',v);history.replaceState(null,'',u);render()}
+document.addEventListener('click',e=>{const el=e.target.closest('[data-act]');if(!el)return;if(el.dataset.act==='close'&&e.target.closest('[data-stop]')&&!e.target.closest('button[data-act="close"]'))return;
+ const a=el.dataset.act,id=+el.dataset.id;const keepPop=['pday','psave','pclose'].includes(a)||el.closest('#pop');if(!keepPop)document.getElementById('pop')?.remove();
+ if(a==='view'){S.view=el.dataset.v;S.lens=S.lens;S.topicPage=null}
+ if(a==='captain'){S.view='home';S.lens=null;S.topicPage=null;S.sheet=null}
+ if(a==='scout'){S.view='scout';S.lens=null}
+ if(a==='lens'){S.lens=el.dataset.b||null;if(S.variant==='A'&&S.lens)S.view='home'}
+ if(a==='studio'){S.studio=el.dataset.v;S.lens=null;S.topicPage=null}
+ if(a==='topic'){S.topicPage=el.dataset.t;S.sheet=null;if(S.variant==='A')S.view='topics';else if(S.variant==='B'){S.studio='topics';S.lens=null}else{openSheet(vTopicPage(el.dataset.t))}}
+ if(a==='topicsback'){S.topicPage=null;if(S.variant==='C'){openSheet(vTopics())}}
+ if(a==='open'){S.sheet=itemSheet(id)}
+ if(a==='close'){S.sheet=null}
+ if(a==='date'){e.stopPropagation();render();const anchor=document.querySelector(`[data-act="date"][data-id="${id}"]`)||el;datePop(id,anchor);return}
+ if(a==='pday'){S.pick.day=+el.dataset.d;document.getElementById('pop').innerHTML=popInner(ITEMS.find(i=>i.id===S.pick.id));bindPop();return}
+ if(a==='pclose'){document.getElementById('pop')?.remove();return}
+ if(a==='psave'){const it=ITEMS.find(i=>i.id===S.pick.id);it.date=`2026-11-${String(S.pick.day).padStart(2,'0')}`;it.time=document.getElementById('pt').checked?document.getElementById('ptime').value:'';it.conf='you';it.sug=null;it.fuzzy=null;document.getElementById('pop')?.remove();if(S.sheet)S.sheet=itemSheet(it.id);toast(`Saved: ${fmt(it.date)}${it.time?' at '+it.time:''}. It's on your calendar and timeline now.`)}
+ if(a==='day'){const d=el.dataset.d;const on=vis().filter(i=>i.date===d||(!i.date&&i.sug===d));const p=document.getElementById('daypop');if(p){p.innerHTML=`<div class="need"><b style="font-weight:600">${fmt(d)}</b>${on.map(itemRow).join('')||'<div class="mut" style="margin-top:6px">Free day.</div>'}</div>`;return}}
+ if(a==='priority'){}
+ if(a==='attach'){S.attach={kind:el.dataset.k,label:el.dataset.k==='Link'?'https://www.youtube.com/watch?v=8oP3LlF1DZU':'sample.'+el.dataset.k.toLowerCase()}}
+ if(a==='unattach'){S.attach=null}
+ if(a==='add'){const t=document.getElementById('noteText').value.trim();if(!t&&!S.attach){toast('Write a note or attach something first');return}const low=t.toLowerCase();
+  // Prototype keyword guess, in rule order: R1 medical, R2 own money, R3 stated purpose, then the subject (R5).
+  const R5='R5 · the subject decides';const guess=[[/doctor|medicine|pill|tablet|therapy|symptom/,'Medicines & doctors','R1 · anything medical goes to Health'],[/bill|rent|tax|netflix|subscri|\bemi\b|\bfees?\b/,'Bills & subscriptions','R2 · your own bills and subscriptions'],[/birthday|gift|wedding|anniversar|my date/,'Occasions & gifts','R3 · your stated purpose'],[/python|study|exam|quiz|statistic|assignment|college/,'Study',R5],[/gym|workout|diet|sleep/,'Fitness & food',R5],[/trip|flight|hotel|visa|holiday/,'Trips & places',R5],[/recipe|cook/,'Cooking & hobbies',R5],[/watch|movie|book|podcast|video/,'Watch, read & listen',R5],[/\bmom\b|\bdad\b|family|sister|brother/,'Family',R5],[/friend|\bcall\b|message/,'Friends & partner',R5],[/\bbuy\b|grocer|repair|clean/,'Home & errands',R5]].find(g=>g[0].test(low));
+  ITEMS.unshift({id:Math.max(...ITEMS.map(i=>i.id))+1,title:(t||S.attach.label).slice(0,60),topic:guess?guess[1]:null,type:S.attach?S.attach.kind:'Note',pri:'md',date:null,note:S.attach?t:null,src:S.attach?S.attach.label:t,why:'Filed from your words (prototype keyword guess)',rule:guess?guess[2]:'R6 · no area fits clearly, so Captain asks',hint:'just added',status:guess?'open':'needs'});S.attach=null;
+  toast(guess?`Captain filed it under ${BOTS[TOPICS[guess[1]].bot].n} › ${guess[1]}`:'Captain isn\'t sure where this goes, so it\'s waiting in Needs you')}
+ if(a==='ask'){ask(el.dataset.q);return}
+ if(a==='askgo'){ask(document.getElementById('askIn').value);return}
+ if(a==='dropit'){ITEMS.find(i=>i.id===id).status='dropped';toast('Dropped. The Learning & work bot remembers the Halloween budget is no longer needed.')}
+ if(a==='mkstat'){S.statDone=1;TOPICS['Statistics']={bot:'learn',parent:'Study',d:'Hypothesis testing and Stats practice'};BOTS.learn.topics.push('Statistics');ITEMS.find(i=>i.id===4).topic='Statistics';toast('Created Study › Statistics and moved your PDF into it.')}
+ if(a==='nostat'){S.statDone=1;toast('OK. The Learning & work bot will ask again only if more Statistics notes arrive.')}
+ if(a==='area'||a==='areabot'){const it=ITEMS.find(i=>i.id===id);it.topic=a==='area'?el.dataset.t:BOTS[el.dataset.b].topics.find(t=>!TOPICS[t].parent);it.status='open';it.choices=null;it.rule='R6 · you chose the area; Captain keeps your choice as an example for next time';if(S.sheet)S.sheet=itemSheet(id);toast(`Filed under ${BOTS[botOf(it)].n} › ${it.topic}. Captain will remember your choice.`)}
+ if(a==='markdone'){ITEMS.find(i=>i.id===id).status='done';S.sheet=null;toast('Marked done. Removed from calendar, priority and timeline.')}
+ if(a==='scout'){const it=ITEMS.find(i=>i.id===id);const b=BOTS[botOf(it)].n;const ans=el.dataset.a;
+  if(ans==='done'){it.status='done';S.scout.done[id]='Done ✓ · removed from your lists';S.notice=`Captain updated <b>${b} bot</b> memory: "${esc(it.title)}: done".`}
+  if(ans==='drop'){it.status='dropped';S.scout.done[id]='Dropped · removed from your lists';S.notice=`Captain updated <b>${b} bot</b> memory: "${esc(it.title)}: no longer needed".`}
+  if(ans==='later'){S.scout.done[id]='Pick a new date';S.notice=`Captain will keep "${esc(it.title)}" and ask for a date.`;render();const anchor=[...document.querySelectorAll('.need')].find(n=>n.textContent.includes('Pick a new date'))||document.body;datePop(id,anchor);return}
+  if(S.variant==='C')openSheet(vScout())}
+ if(a==='sheetview'){S.view=el.dataset.v;S.topicPage=null;openSheet(viewHtml(el.dataset.v))}
+ if(a==='sheetcaptain'){openSheet(vCaptain())}
+ if(a==='sheetscout'){openSheet(vScout())}
+ if(a==='sheetbot'){S.lens=S.lens===el.dataset.b?null:el.dataset.b;openSheet(S.lens?vBot(S.lens):vCaptain())}
+ if(a==='toast'){toast(el.dataset.m);return}
+ if(a==='vprev'||a==='vnext'){const vs=['A','B','C'];const k=(vs.indexOf(S.variant)+(a==='vnext'?1:2))%3;setVariant(vs[k]);return}
+ render();bindPop()});
+function bindPop(){const pt=document.getElementById('pt');if(pt)pt.onchange=()=>{document.getElementById('ptime').hidden=!pt.checked}}
+document.addEventListener('keydown',e=>{if(e.target.closest('input,textarea,[contenteditable]'))return;const vs=['A','B','C'];if(e.key==='ArrowRight')setVariant(vs[(vs.indexOf(S.variant)+1)%3]);if(e.key==='ArrowLeft')setVariant(vs[(vs.indexOf(S.variant)+2)%3])});
+render();
+</script>
+</body>
+</html>

@@ -30,6 +30,17 @@ def client(tmp_path, monkeypatch):
         sys.modules.pop(module_name, None)
     main = importlib.import_module("app.main")
     database = importlib.import_module("app.database")
+    # These tests use fixed November 2026 dates ("dentist on 3 Nov"). Pin
+    # "today" so they keep meaning this November: after 3 Nov the date reader
+    # rightly reads "3 Nov" as next year.
+    monkeypatch.setattr(
+        importlib.import_module("app.attention.dates"),
+        "today_in_configured_tz",
+        lambda: date(2026, 11, 2),
+    )
+    # Change 012 reads a note's dates from the day it was written, so pin
+    # that day too: these notes count as written on 2 Nov 2026.
+    monkeypatch.setattr(database, "_written_day", lambda session, item_ids: date(2026, 11, 2))
 
     assert database.engine.url.database == str(test_db_path)
     with TestClient(main.app) as test_client:
@@ -133,31 +144,28 @@ def test_calendar_events_user_isolation(client):
 
 
 def test_calendar_events_ambiguous_and_confirmed_dates(client):
-    # "renew insurance by next Friday" is relative / ambiguous
+    # "renew insurance by next Friday" is a guess (change 012): it waits for
+    # your OK as a suggestion and stays off the calendar until you confirm it.
     item = client.post("/api/items", json={"raw_text": "renew insurance by next Friday"}).json()
     client.post("/api/analyze")
 
-    # Fetch event in range encompassing next Friday
-    from app.attention.dates import today_in_configured_tz, parse_timing_phrase
+    from app.attention.dates import parse_timing_phrase
     parsed = parse_timing_phrase("next Friday")
     assert parsed.due_date is not None
     due_iso = parsed.due_date.isoformat()
 
-    events = client.get(f"/api/calendar/events?start={due_iso}&end={due_iso}").json()
-    assert len(events) == 1
-    ev = events[0]
-    assert ev["needs_confirmation"] is True
-    assert ev["timing_confirmed"] is False
+    assert client.get(f"/api/calendar/events?start={due_iso}&end={due_iso}").json() == []
+    task = next(t for t in client.get("/api/tasks").json() if item["id"] in t["source_item_ids"])
+    assert task["due_on"] is None and task["suggested_due_on"] == due_iso
+    assert task["due_confidence"] == "suggested"
 
-    # Confirm the timing via tasks API
-    task_id = ev["id"]
+    # Confirm a different day via the tasks API: it goes on the calendar, confirmed.
     confirm_res = client.post(
-        f"/api/tasks/{task_id}/confirm-timing",
+        f"/api/tasks/{task['id']}/confirm-timing",
         json={"timing_text": "2026-11-20"},
     )
     assert confirm_res.status_code == 200
 
-    # Event now has timing_confirmed=True and needs_confirmation=False on the confirmed date
     updated_events = client.get("/api/calendar/events?start=2026-11-20&end=2026-11-20").json()
     assert len(updated_events) == 1
     assert updated_events[0]["timing_confirmed"] is True
@@ -238,10 +246,13 @@ def test_calendar_events_different_source_types(client, monkeypatch):
     # Text note
     text_item = client.post("/api/items", json={"raw_text": "Dentist appointment on 3 Nov"}).json()
 
-    # Image note with OCR text containing a date
+    # Image saved with your note giving its date. Tasks (and so calendar
+    # dates) come only from your own words, never from a source's text
+    # (change 014), so the OCR'd date alone would not be enough.
     img_res = client.post(
         "/api/items/image",
-        files={"file": ("receipt.png", make_png_bytes(), "image/png")}
+        files={"file": ("receipt.png", make_png_bytes(), "image/png")},
+        data={"context": "My flight is on 18 Nov"},
     )
     assert img_res.status_code == 200
     img_item = img_res.json()

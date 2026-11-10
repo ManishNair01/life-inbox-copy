@@ -14,6 +14,7 @@
 | 6 — Deployable beta | `milestone/6-deployable-beta` | `milestone-6` | Done |
 | 7 — NVIDIA NIM & Voice Notes | `main` | `milestone-7` | Done |
 | 8 — In-App Calendar | `main` | `milestone-8` | Done |
+| v2 Phases 4–7 (changes 016–025) | not yet a branch: `milestone/7-production-auth` work copy | — | Built and tested locally; not pushed (waiting for the owner's review) |
 
 See Project store reports under `docs/milestone-N-report.md` for full
 quality-gate evidence.

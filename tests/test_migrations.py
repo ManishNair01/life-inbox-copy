@@ -35,8 +35,34 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "tasks",
             "topics",
             "calendar_action_receipts",
+            "notification_preferences",
+            "notification_deliveries",
+            "push_subscriptions",
+            "task_date_changes",
             "users",
+            "ai_calls",
+            "memory_facts",
+            "user_settings",
+            "plan_updates",
+            "task_events",
+            "topic_proposals",
+            "bot_summaries",
+            "greetings",
         } <= set(inspector.get_table_names())
+        # The AI call log keeps sizes and outcomes only, never prompt or answer text.
+        assert {column["name"] for column in inspector.get_columns("ai_calls")} == {
+            "id",
+            "owner_user_id",
+            "action",
+            "model",
+            "outcome",
+            "attempt",
+            "status_code",
+            "input_size",
+            "output_size",
+            "duration_ms",
+            "created_at",
+        }
         columns = {
             column["name"]: column
             for column in inspector.get_columns("inbox_items")
@@ -54,9 +80,12 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "storage_path",
             "extracted_text",
             "ai_description",
+            "user_context",
             "owner_user_id",
             "created_at",
             "updated_at",
+            "link_card",  # change 015 (migration 0024)
+            "source_summary",  # change 022 (migration 0030)
         }
         assert columns["updated_at"]["nullable"] is True
         assert {
@@ -89,6 +118,17 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "user_tags_json",
             "needs_review",
             "updated_at",
+            # change 014 (migration 0023)
+            "filing_rule",
+            "filing_confidence",
+            "filing_choices",
+            "filed_by",
+            "filing_pending",
+            "ai_summary",
+            "suggested_action",
+            "cleaned_transcript",
+            # change 016 (migration 0027)
+            "memory_used",
         }
         assert {
             column["name"]
@@ -101,6 +141,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "ai_timing_text",
             "timing_confirmed",
             "due_on",
+            "due_time",
             "due_confidence",
             "snoozed_until",
             "reminder_at",
@@ -109,6 +150,14 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "owner_user_id",
             "created_at",
             "updated_at",
+            "user_priority",
+            "completed_at",
+            "date_recheck",
+            "suggested_due_on",
+            "suggested_due_time",
+            # change 018 (migration 0028)
+            "someday",
+            "someday_since",
         }
         assert "calendar_action_receipts" in set(inspector.get_table_names())
         assert {
@@ -121,6 +170,13 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "created_at",
             "updated_at",
             "archived",
+            "parent_topic_id",
+            "bot_key",
+            "origin",
+            # change 020 (migration 0029): a topic's history from a proposal
+            "proposed_by",
+            "evidence_item_ids",
+            "approved_at",
         }
         assert {
             column["name"]
@@ -167,7 +223,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
                 text("SELECT version_num FROM alembic_version")
             )
             topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
-        assert revision == "0013_otp_challenges"
+        assert revision == "0030_source_summary"
         assert topic_count >= 9
     finally:
         engine.dispose()
@@ -268,7 +324,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0013_otp_challenges"
+        assert revision == "0030_source_summary"
     finally:
         engine.dispose()
 
@@ -354,7 +410,7 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0013_otp_challenges"
+        assert revision == "0030_source_summary"
 
         # Milestone 2 drops the one-task-per-source unique index so one
         # inbox item may source multiple durable tasks.
@@ -451,9 +507,10 @@ def test_upgrade_to_password_auth_scopes_topic_names_per_owner(
             assert connection.scalar(
                 text("SELECT topic_id FROM item_insights WHERE item_id = 1")
             ) == work_id
+            # 0018 renamed v1's "Work" to "Work & career"; the note stayed on it.
             assert connection.scalar(
                 text("SELECT name FROM topics WHERE id = :id"), {"id": work_id}
-            ) == "Work"
+            ) == "Work & career"
             connection.execute(
                 text(
                     """
@@ -473,7 +530,7 @@ def test_upgrade_to_password_auth_scopes_topic_names_per_owner(
                     """
                     INSERT INTO topics (name, owner_user_id, created_at,
                                         updated_at, archived)
-                    VALUES ('Work', :owner, '2026-01-02', '2026-01-02', 0)
+                    VALUES ('Work & career', :owner, '2026-01-02', '2026-01-02', 0)
                     """
                 ),
                 {"owner": second_id},
@@ -485,7 +542,7 @@ def test_upgrade_to_password_auth_scopes_topic_names_per_owner(
                         """
                         INSERT INTO topics (name, owner_user_id, created_at,
                                             updated_at, archived)
-                        VALUES ('Work', 1, '2026-01-03', '2026-01-03', 0)
+                        VALUES ('Work & career', 1, '2026-01-03', '2026-01-03', 0)
                         """
                     )
                 )

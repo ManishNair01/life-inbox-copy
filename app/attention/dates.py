@@ -31,6 +31,11 @@ class ParsedTiming:
     normalized_iso: Optional[str]
     note: Optional[str] = None
     time_of_day: Optional[str] = None
+    # True when the words name the day itself ("today", "tomorrow", "12 Nov",
+    # "2026-11-12", "in 3 days"); False for a guess ("this weekend", "Friday",
+    # "in December", "ASAP"). Change 012: named days go straight on the
+    # calendar as "from your note"; guesses wait for your OK.
+    explicit: bool = False
 
 
 _ISO = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
@@ -55,6 +60,11 @@ _MONTH_ONLY = re.compile(
     re.I,
 )
 _IN_DAYS = re.compile(r"\bin\s+(\d+)\s+days?\b", re.I)
+# "by 5th", "before the 15th", "on the 3rd": a day of the month without the
+# month (change 014). Only after one of these words, so "3rd floor" isn't a date.
+_ORDINAL_DAY = re.compile(
+    r"\b(?:by|before|on|due|till|until)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b", re.I
+)
 _WEEKDAY = re.compile(
     r"\b(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     re.I,
@@ -108,6 +118,38 @@ def extract_time_of_day(phrase: Optional[str]) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def normalize_time_of_day(phrase: Optional[str]) -> Optional[str]:
+    """Normalize an explicit time phrase to local 24-hour HH:MM."""
+    extracted = extract_time_of_day(phrase)
+    if extracted is None:
+        return None
+
+    value = extracted.lower().replace(" ", "")
+    suffix = value[-2:] if value.endswith(("am", "pm")) else None
+    clock = value[:-2] if suffix else value
+    if ":" in clock:
+        hour_text, minute_text = clock.split(":", 1)
+    else:
+        hour_text, minute_text = clock, "00"
+
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+    if minute > 59:
+        return None
+
+    if suffix:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if suffix == "pm" else 0)
+    elif not 0 <= hour <= 23:
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
 def parse_timing_phrase(
     phrase: Optional[str],
     *,
@@ -147,6 +189,7 @@ def parse_timing_phrase(
             needs_confirmation=False,
             normalized_iso=ref.isoformat(),
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     if re.search(r"\btomorrow\b", lower):
@@ -158,6 +201,7 @@ def parse_timing_phrase(
             needs_confirmation=False,
             normalized_iso=due.isoformat(),
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     if "this weekend" in lower or "weekend" in lower:
@@ -184,6 +228,7 @@ def parse_timing_phrase(
             needs_confirmation=False,
             normalized_iso=due.isoformat(),
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     in_days = _IN_DAYS.search(original)
@@ -196,6 +241,7 @@ def parse_timing_phrase(
             needs_confirmation=False,
             normalized_iso=due.isoformat(),
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     mdy = _MDY.search(original)
@@ -226,6 +272,7 @@ def parse_timing_phrase(
             normalized_iso=due.isoformat(),
             note=None if confidence == "high" else "Year inferred; confirm.",
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     dmy = _DMY.search(original)
@@ -256,6 +303,7 @@ def parse_timing_phrase(
             normalized_iso=due.isoformat(),
             note=None if confidence == "high" else "Year inferred; confirm.",
             time_of_day=time_of_day,
+            explicit=True,
         )
 
     weekday = _WEEKDAY.search(original)
@@ -274,6 +322,32 @@ def parse_timing_phrase(
             needs_confirmation=True,
             normalized_iso=due.isoformat(),
             note="Weekday timing is ambiguous; confirm the intended date.",
+            time_of_day=time_of_day,
+        )
+
+    ordinal = _ORDINAL_DAY.search(original)
+    if ordinal and 1 <= int(ordinal.group(1)) <= 31:
+        # The next date with that day number; the month is a guess, so it is
+        # a suggestion that waits for your OK (explicit stays False).
+        wanted = int(ordinal.group(1))
+        year, month = ref.year, ref.month
+        if wanted < ref.day:
+            month += 1
+        for _ in range(13):
+            if month > 12:
+                year, month = year + 1, 1
+            try:
+                due = date(year, month, wanted)
+                break
+            except ValueError:  # e.g. the 31st in a 30-day month
+                month += 1
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="medium",
+            needs_confirmation=True,
+            normalized_iso=due.isoformat(),
+            note="A day of the month without the month; the next one. Needs confirmation.",
             time_of_day=time_of_day,
         )
 
@@ -303,6 +377,14 @@ def parse_timing_phrase(
         note="Could not confidently normalize this timing phrase.",
         time_of_day=time_of_day,
     )
+
+
+def date_source(parsed: ParsedTiming) -> Optional[str]:
+    """Where a task's date stands (change 012): "from_note" when your words name
+    the day, "suggested" when Life Inbox had to guess it, None for no date."""
+    if not parsed.normalized_iso:
+        return None
+    return "from_note" if parsed.explicit else "suggested"
 
 
 def classify_attention_bucket(

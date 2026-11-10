@@ -4,6 +4,35 @@ const pendingNoteActions = new Set();
 const pendingTaskActions = new Set();
 const completedNoteIdsCache = new Set();
 const analysisQueue = [];
+let notificationSettings = null;
+
+// The lens (shell.js, change 009): the life area every list is filtered by.
+function lensKey() {
+  return (window.LifeInboxLens && window.LifeInboxLens.key) || '';
+}
+
+function withLens(url) {
+  const key = lensKey();
+  if (!key) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}bot=${encodeURIComponent(key)}`;
+}
+
+// Tells the shell to refresh Home, the life areas and pinned topics.
+function notifyChanged() {
+  window.dispatchEvent(new CustomEvent('lifeinbox:changed'));
+}
+
+// A new note or source was saved (any kind). The shell closes the floating
+// composer and shows "Saved" when you captured from another view (change 011a).
+function notifyCaptured(itemId) {
+  window.dispatchEvent(new CustomEvent('lifeinbox:captured', {detail: {itemId}}));
+}
+
+// You edited a note's text. If that moves a date you had confirmed, the shell
+// asks you to confirm the new one once the note is filed again (change 012).
+function notifyEdited(itemId) {
+  window.dispatchEvent(new CustomEvent('lifeinbox:edited', {detail: {itemId}}));
+}
 
 async function getCompletedNoteIds() {
   try {
@@ -29,8 +58,8 @@ async function processAnalysisQueue() {
   setButtonBusy(
     'analyzeButton',
     true,
-    'Analyzing…',
-    'Analyze Entire Inbox with AI'
+    'Re-sorting…',
+    'Re-sort everything'
   );
 
   while (analysisQueue.length > 0) {
@@ -54,6 +83,7 @@ async function processAnalysisQueue() {
       await loadAttention();
       await loadCalendarEvents();
       setStatus('analysisStatus', 'Analysis complete.');
+      if (itemId) window.dispatchEvent(new CustomEvent('lifeinbox:analyzed', {detail: {itemId}}));
     } catch {
       setStatus(
         'analysisStatus',
@@ -67,9 +97,37 @@ async function processAnalysisQueue() {
   setButtonBusy(
     'analyzeButton',
     false,
-    'Analyzing…',
-    'Analyze Entire Inbox with AI'
+    'Re-sorting…',
+    'Re-sort everything'
   );
+}
+
+// "Re-sort everything" (change 014) files every note you didn't file yourself
+// again, 25 per AI call. The first click says how many calls; the second runs it.
+let resortArmedUntil = 0;
+async function resortEverything() {
+  const button = document.getElementById('analyzeButton');
+  if (Date.now() > resortArmedUntil) {
+    try {
+      const plan = await fetchJson('/api/filing/resort-plan', undefined, 'Could not count your notes.');
+      if (!plan.notes) {
+        setStatus('analysisStatus', 'Nothing to re-sort: every note is filed by you or not filed yet.');
+        return;
+      }
+      const cost = plan.ai
+        ? `${plan.calls} AI call${plan.calls === 1 ? '' : 's'} (${plan.per_call} notes per call)`
+        : 'no AI calls (offline)';
+      setStatus('analysisStatus', `Re-sorting ${plan.notes} note${plan.notes === 1 ? '' : 's'} uses ${cost}. Notes you filed yourself stay where they are. Click again to start.`);
+      button.textContent = `Yes, re-sort (${plan.ai ? `${plan.calls} call${plan.calls === 1 ? '' : 's'}` : 'offline'})`;
+      resortArmedUntil = Date.now() + 15000;
+    } catch (error) {
+      setStatus('analysisStatus', error.message, true);
+    }
+    return;
+  }
+  resortArmedUntil = 0;
+  await analyzeInbox();
+  button.textContent = 'Re-sort everything';
 }
 
 function autoAnalyzeInbox(itemId = null) {
@@ -87,15 +145,218 @@ const itemFilterFields = {
 
 function setStatus(elementId, message, isError = false) {
   const element = document.getElementById(elementId);
+  if (!element) return;
   element.textContent = message;
   element.classList.toggle('error', isError);
+  if (message) {
+    element.classList.remove('flash');
+    // eslint-disable-next-line no-unused-expressions
+    void element.offsetWidth;
+    element.classList.add('flash');
+  }
 }
 
 function setButtonBusy(buttonId, busy, busyLabel, idleLabel) {
   const button = document.getElementById(buttonId);
+  if (!button) return;
   button.disabled = busy;
   button.textContent = busy ? busyLabel : idleLabel;
   button.setAttribute('aria-busy', String(busy));
+}
+
+function decodeApplicationServerKey(encodedKey) {
+  const padded = encodedKey + '='.repeat((4 - encodedKey.length % 4) % 4);
+  const base64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64);
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+function updateNotificationPrompt() {
+  const prompt = document.getElementById('notificationPrompt');
+  const message = document.getElementById('notificationPromptMessage');
+  const button = document.getElementById('enableNotificationPrompt');
+  const enabledCheckbox = document.getElementById('notificationsEnabled');
+  const supported =
+    'Notification' in window
+    && 'serviceWorker' in navigator
+    && 'PushManager' in window;
+  const permission = supported ? Notification.permission : 'unsupported';
+
+  if (!notificationSettings || notificationSettings.enabled) {
+    prompt.hidden = true;
+    return;
+  }
+  prompt.hidden = false;
+
+  if (!supported) {
+    message.textContent =
+      'This browser does not support background task notifications.';
+    button.hidden = true;
+  } else if (!notificationSettings.push_available) {
+    message.textContent =
+      'Task notifications are not configured on this server yet.';
+    button.hidden = true;
+  } else if (permission === 'denied') {
+    message.textContent =
+      'Notifications are blocked for this site in your browser. Open site settings for 127.0.0.1, change Notifications to Allow, then reload this page.';
+    button.hidden = true;
+  } else {
+    message.textContent =
+      'Get a daily reminder for tasks due today and an extra alert for eligible High-priority tasks. Choose Enable to allow this browser and turn them on.';
+    button.hidden = false;
+    button.disabled = enabledCheckbox.disabled;
+  }
+}
+
+function enableNotificationsFromPrompt(event) {
+  document.getElementById('notificationsEnabled').checked = true;
+  saveNotificationSettings(event);
+}
+
+async function loadNotificationSettings() {
+  try {
+    notificationSettings = await fetchJson(
+      '/api/notifications/settings',
+      undefined,
+      'Unable to load notification settings.'
+    );
+    document.getElementById('notificationsEnabled').checked =
+      notificationSettings.enabled;
+    document.getElementById('dailyDigestTime').value =
+      notificationSettings.daily_digest_time || '08:00';
+    document.getElementById('notificationTimezone').value =
+      notificationSettings.timezone || 'UTC';
+    document.getElementById('includeUnscheduledPrompt').checked =
+      notificationSettings.include_unscheduled_prompt;
+
+    if (!notificationSettings.configured) {
+      const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (browserTimezone) {
+        document.getElementById('notificationTimezone').value = browserTimezone;
+      }
+    }
+
+    const supported =
+      'Notification' in window
+      && 'serviceWorker' in navigator
+      && 'PushManager' in window;
+    document.getElementById('notificationsEnabled').disabled =
+      (!supported || !notificationSettings.push_available)
+      && !notificationSettings.enabled;
+    updateNotificationPrompt();
+    if (!supported) {
+      setStatus(
+        'notificationStatus',
+        'This browser does not support background push notifications.'
+      );
+    } else if (!notificationSettings.push_available) {
+      setStatus(
+        'notificationStatus',
+        'Push delivery is not configured on the server yet.'
+      );
+    } else {
+      setStatus(
+        'notificationStatus',
+        notificationSettings.enabled
+          ? `Notifications are enabled (${notificationSettings.subscription_count} device(s)).`
+          : 'Notifications are off. Enable them here to receive task alerts.'
+      );
+    }
+  } catch {
+    setStatus(
+      'notificationStatus',
+      'Could not load notification settings. Reload to try again.',
+      true
+    );
+  }
+}
+
+async function saveNotificationSettings(event) {
+  event.preventDefault();
+  const enabled = document.getElementById('notificationsEnabled').checked;
+  const submitButton = document.getElementById('saveNotificationSettingsButton');
+  const time = document.getElementById('dailyDigestTime').value;
+  const timezoneName = document.getElementById('notificationTimezone').value.trim();
+
+  submitButton.disabled = true;
+  setStatus('notificationStatus', 'Saving notification settings…');
+  try {
+    if (enabled) {
+      if (
+        !('Notification' in window)
+        || !('serviceWorker' in navigator)
+        || !('PushManager' in window)
+      ) {
+        throw new Error('This browser does not support push notifications.');
+      }
+      if (!notificationSettings?.vapid_public_key) {
+        throw new Error('Push delivery is not configured on the server yet.');
+      }
+      let permission = Notification.permission;
+      if (permission === 'default') {
+        permission = await Notification.requestPermission();
+      }
+      if (permission !== 'granted') {
+        throw new Error(
+          'Notifications are blocked for this site. Open site settings for 127.0.0.1, change Notifications to Allow, then reload this page.'
+        );
+      }
+
+      const registration = await navigator.serviceWorker.register(
+        '/service-worker.js'
+      );
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeApplicationServerKey(
+            notificationSettings.vapid_public_key
+          )
+        });
+      }
+      await fetchJson(
+        '/api/notifications/subscriptions',
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(subscription.toJSON())
+        },
+        'Unable to register this browser for notifications.'
+      );
+    }
+
+    await fetchJson(
+      '/api/notifications/settings',
+      {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          enabled,
+          daily_digest_time: time,
+          timezone: timezoneName,
+          include_unscheduled_prompt:
+            document.getElementById('includeUnscheduledPrompt').checked
+        })
+      },
+      'Unable to save notification settings. Check the time and timezone.'
+    );
+    await loadNotificationSettings();
+    setStatus(
+      'notificationStatus',
+      enabled
+        ? 'Notifications enabled. Daily and eligible High-priority task alerts are ready.'
+        : 'Notifications disabled.'
+    );
+  } catch (error) {
+    setStatus(
+      'notificationStatus',
+      error.message || 'Could not save notification settings.',
+      true
+    );
+    updateNotificationPrompt();
+  } finally {
+    submitButton.disabled = false;
+  }
 }
 
 function itemFilterParams() {
@@ -200,6 +461,7 @@ function clearItemFilters() {
 }
 
 function showFailedItems() {
+  if (window.LifeInboxShell) window.LifeInboxShell.goTo('topics');
   document.getElementById('processingStatusFilter').value = 'failed';
   updateUrl({processing_status: 'failed'});
   document.getElementById('rawSavedNotesHeading').scrollIntoView({
@@ -233,6 +495,9 @@ async function fetchJson(url, options, friendlyError) {
     throw new Error(friendlyError);
   }
 
+  const method = String((options && options.method) || 'GET').toUpperCase();
+  if (method !== 'GET') notifyChanged();
+
   if (response.status === 204) {
     return null;
   }
@@ -244,6 +509,235 @@ async function fetchJson(url, options, friendlyError) {
   }
 }
 
+// Matches the server's raw_text max_length in app/schemas.py. The textarea's
+// maxlength stops typing and trims pastes at this length.
+const NOTE_MAX_LENGTH = 2000;
+const NOTE_NEAR_LIMIT = 1800;
+
+function updateNoteCharCount() {
+  const textarea = document.getElementById('noteText');
+  const counter = document.getElementById('noteCharCount');
+  if (!textarea || !counter) return;
+  const length = textarea.value.length;
+  const field = textarea.closest('.note-field');
+  const atLimit = length >= NOTE_MAX_LENGTH;
+  counter.textContent = atLimit
+    ? `${length} / ${NOTE_MAX_LENGTH} · max 2000 characters reached`
+    : `${length} / ${NOTE_MAX_LENGTH} · max 2000 characters`;
+  if (field) {
+    field.classList.toggle('at-limit', atLimit);
+    field.classList.toggle('near-limit', !atLimit && length >= NOTE_NEAR_LIMIT);
+  }
+}
+
+function handleNotePaste(event) {
+  const textarea = event.target;
+  const pasted = (event.clipboardData || window.clipboardData)?.getData('text') || '';
+  const selected = textarea.selectionEnd - textarea.selectionStart;
+  const room = NOTE_MAX_LENGTH - (textarea.value.length - selected);
+  if (pasted.length > room) {
+    setStatus(
+      'noteStatus',
+      `Notes can be up to ${NOTE_MAX_LENGTH} characters, so only the first part of what you pasted was added. Save the rest as another note.`,
+      true
+    );
+  }
+}
+
+function setupNoteLimit() {
+  const textarea = document.getElementById('noteText');
+  if (!textarea) return;
+  textarea.maxLength = NOTE_MAX_LENGTH;
+  textarea.addEventListener('input', updateNoteCharCount);
+  textarea.addEventListener('paste', handleNotePaste);
+  updateNoteCharCount();
+}
+
+// --- Composer: a note, optionally with one attached source ------------------
+// The note becomes the source's "context": the user's own words about why it
+// matters, which the AI treats as the strongest clue for the topic.
+let pendingAttachment = null; // {kind: 'link' | 'pdf' | 'image' | 'audio', url?, file?}
+const ATTACHMENT_KINDS = {
+  link: {label: 'link', badge: 'LINK', input: null, endpoint: '/api/items/url'},
+  pdf: {label: 'PDF', badge: 'PDF', input: 'pdfFile', endpoint: '/api/items/pdf'},
+  image: {label: 'image', badge: 'IMAGE', input: 'imageFile', endpoint: '/api/items/image'},
+  audio: {label: 'audio', badge: 'AUDIO', input: 'voiceFile', endpoint: '/api/items/voice'}
+};
+const LONE_LINK = /^https?:\/\/\S+$/i;
+
+function composerAddLabel() {
+  if (!pendingAttachment) return 'Add note';
+  const kind = ATTACHMENT_KINDS[pendingAttachment.kind].label;
+  const hasNote = document.getElementById('noteText').value.trim().length > 0;
+  return hasNote ? `Add ${kind} with note` : `Add ${kind}`;
+}
+
+function refreshComposer() {
+  const chip = document.getElementById('attachmentChip');
+  const button = document.getElementById('addNoteButton');
+  if (pendingAttachment) {
+    const kind = ATTACHMENT_KINDS[pendingAttachment.kind];
+    document.getElementById('attachmentKind').textContent = kind.badge;
+    document.getElementById('attachmentLabel').textContent =
+      pendingAttachment.url || pendingAttachment.file?.name || '';
+    chip.hidden = false;
+  } else {
+    chip.hidden = true;
+  }
+  if (button && !isSavingNote) button.textContent = composerAddLabel();
+}
+
+function setAttachment(attachment) {
+  pendingAttachment = attachment;
+  refreshComposer();
+  document.getElementById('noteText').focus();
+}
+
+function clearAttachment() {
+  if (pendingAttachment && pendingAttachment.kind !== 'link') {
+    const input = document.getElementById(ATTACHMENT_KINDS[pendingAttachment.kind].input);
+    if (input) input.value = '';
+  }
+  pendingAttachment = null;
+  refreshComposer();
+}
+
+function clearComposerNote(savedText) {
+  const textarea = document.getElementById('noteText');
+  if (textarea && savedText && textarea.value.trim() === savedText) {
+    textarea.value = '';
+    updateNoteCharCount();
+  }
+}
+
+function openLinkAttach() {
+  document.getElementById('linkAttachRow').hidden = false;
+  document.getElementById('urlText').focus();
+}
+
+function cancelLinkAttach() {
+  document.getElementById('urlText').value = '';
+  document.getElementById('linkAttachRow').hidden = true;
+}
+
+function confirmLinkAttach() {
+  const input = document.getElementById('urlText');
+  const url = input.value.trim();
+  if (!LONE_LINK.test(url)) {
+    setStatus('noteStatus', 'Paste a full link starting with http:// or https://', true);
+    input.focus();
+    return;
+  }
+  cancelLinkAttach();
+  setStatus('noteStatus', '');
+  setAttachment({kind: 'link', url});
+}
+
+function pickAttachment(kind) {
+  document.getElementById(ATTACHMENT_KINDS[kind].input).click();
+}
+
+function setupComposer() {
+  for (const [kind, info] of Object.entries(ATTACHMENT_KINDS)) {
+    if (!info.input) continue;
+    const input = document.getElementById(info.input);
+    input?.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (file) setAttachment({kind, file});
+    });
+  }
+  const url = document.getElementById('urlText');
+  url?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); confirmLinkAttach(); }
+    if (event.key === 'Escape') { event.preventDefault(); cancelLinkAttach(); }
+  });
+  document.getElementById('noteText')?.addEventListener('input', refreshComposer);
+  refreshComposer();
+}
+
+function savedSourceMessage(kind, item) {
+  const label = ATTACHMENT_KINDS[kind].label;
+  const name = label.charAt(0).toUpperCase() + label.slice(1);
+  if (item.processing_status !== 'ready') {
+    return [`${name} saved, but reading it failed: ${item.error_message || 'unknown error'}`, true];
+  }
+  return [item.user_context ? `${name} saved with your note.` : `${name} saved.`, false];
+}
+
+async function addCapture() {
+  if (isSavingNote) return;
+  const textarea = document.getElementById('noteText');
+  const text = textarea.value.trim();
+  let attachment = pendingAttachment;
+  let context = text;
+  // A link pasted on its own into the note box is saved as a link.
+  if (!attachment && LONE_LINK.test(text)) {
+    attachment = {kind: 'link', url: text};
+    context = '';
+  }
+  if (!attachment) {
+    await addNote();
+    refreshComposer();
+    return;
+  }
+  if (context.length > NOTE_MAX_LENGTH) {
+    setStatus('noteStatus', `Notes can be up to ${NOTE_MAX_LENGTH} characters.`, true);
+    return;
+  }
+  const kind = attachment.kind;
+  const info = ATTACHMENT_KINDS[kind];
+
+  if (kind === 'audio') {
+    if (await uploadVoiceFile(attachment.file, 'Uploading audio…', '', context)) {
+      clearAttachment();
+    }
+    return;
+  }
+
+  isSavingNote = true;
+  setButtonBusy('addNoteButton', true, 'Saving…', composerAddLabel());
+  setStatus('noteStatus', kind === 'link' ? 'Saving link and reading the page…' : `Saving ${info.label} and reading it…`);
+  try {
+    let options;
+    if (kind === 'link') {
+      options = {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(context ? {url: attachment.url, context} : {url: attachment.url})
+      };
+    } else {
+      const formData = new FormData();
+      formData.append('file', attachment.file);
+      if (context) formData.append('context', context);
+      options = {method: 'POST', body: formData};
+    }
+    const item = await fetchJson(info.endpoint, options, `Unable to save ${info.label}.`);
+    const [message, isError] = item && item.reused_from
+      ? [item.filing_reused
+          ? 'You saved this link before: Life Inbox reused what it read and filed it the same way (no AI call).'
+          : 'You saved this link before: Life Inbox reused what it read, and files it again for your new note.', false]
+      : savedSourceMessage(kind, item);
+    setStatus('noteStatus', message, isError);
+    clearComposerNote(text);
+    isSavingNote = false;
+    clearAttachment();
+    await loadNotes();
+    await loadLatestAnalysis();
+    await loadDashboard();
+    if (item && item.id) {
+      notifyCaptured(item.id);
+      // A link saved again with no new note is already filed (change 015).
+      if (!item.filing_reused) autoAnalyzeInbox(item.id);
+      else window.dispatchEvent(new CustomEvent('lifeinbox:changed'));
+    }
+  } catch {
+    setStatus('noteStatus', `We could not save that ${info.label}. Your note and attachment are still here.`, true);
+  } finally {
+    isSavingNote = false;
+    setButtonBusy('addNoteButton', false, 'Saving…', composerAddLabel());
+  }
+}
+
 async function addNote() {
   if (isSavingNote) return;
 
@@ -251,6 +745,11 @@ async function addNote() {
   const text = textarea.value.trim();
   if (!text) {
     setStatus('noteStatus', 'Write a note before saving.', true);
+    textarea.focus();
+    return;
+  }
+  if (text.length > NOTE_MAX_LENGTH) {
+    setStatus('noteStatus', `Notes can be up to ${NOTE_MAX_LENGTH} characters. Shorten it or split it into two notes.`, true);
     textarea.focus();
     return;
   }
@@ -272,6 +771,7 @@ async function addNote() {
 
     if (textarea.value.trim() === text) {
       textarea.value = '';
+      updateNoteCharCount();
     }
     setStatus('noteStatus', 'Note saved.');
     await loadNotes(
@@ -279,6 +779,7 @@ async function addNote() {
     );
     await loadLatestAnalysis();
     if (createdItem && createdItem.id) {
+      notifyCaptured(createdItem.id);
       autoAnalyzeInbox(createdItem.id);
     }
   } catch {
@@ -290,84 +791,6 @@ async function addNote() {
   } finally {
     isSavingNote = false;
     setButtonBusy('addNoteButton', false, 'Saving…', 'Add Note');
-  }
-}
-
-async function addPdf() {
-  const input = document.getElementById('pdfFile');
-  const file = input.files && input.files[0];
-  if (!file) {
-    setStatus('noteStatus', 'Choose a PDF file before uploading.', true);
-    input.focus();
-    return;
-  }
-  setButtonBusy('addPdfButton', true, 'Uploading…', 'Upload PDF');
-  setStatus('noteStatus', 'Saving PDF and extracting text…');
-  const formData = new FormData();
-  formData.append('file', file);
-  try {
-    const item = await fetchJson(
-      '/api/items/pdf',
-      {method: 'POST', body: formData},
-      'Unable to upload PDF.'
-    );
-    input.value = '';
-    setStatus(
-      'noteStatus',
-      item.processing_status === 'ready'
-        ? 'PDF saved and processed.'
-        : `PDF saved but processing failed: ${item.error_message || 'unknown error'}`,
-      item.processing_status !== 'ready'
-    );
-    await loadNotes();
-    await loadLatestAnalysis();
-    await loadDashboard();
-    if (item && item.id) {
-      autoAnalyzeInbox(item.id);
-    }
-  } catch {
-    setStatus('noteStatus', 'We could not upload that PDF.', true);
-  } finally {
-    setButtonBusy('addPdfButton', false, 'Uploading…', 'Upload PDF');
-  }
-}
-
-async function addImage() {
-  const input = document.getElementById('imageFile');
-  const file = input.files && input.files[0];
-  if (!file) {
-    setStatus('noteStatus', 'Choose an image before uploading.', true);
-    input.focus();
-    return;
-  }
-  setButtonBusy('addImageButton', true, 'Uploading…', 'Upload image');
-  setStatus('noteStatus', 'Saving image and running OCR…');
-  const formData = new FormData();
-  formData.append('file', file);
-  try {
-    const item = await fetchJson(
-      '/api/items/image',
-      {method: 'POST', body: formData},
-      'Unable to upload image.'
-    );
-    input.value = '';
-    setStatus(
-      'noteStatus',
-      item.processing_status === 'ready'
-        ? 'Image saved and processed.'
-        : `Image saved but processing failed: ${item.error_message || 'unknown error'}`,
-      item.processing_status !== 'ready'
-    );
-    await loadNotes();
-    await loadLatestAnalysis();
-    await loadDashboard();
-    if (item && item.id) {
-      autoAnalyzeInbox(item.id);
-    }
-  } catch {
-    setStatus('noteStatus', 'We could not upload that image.', true);
-  } finally {
-    setButtonBusy('addImageButton', false, 'Uploading…', 'Upload image');
   }
 }
 
@@ -393,14 +816,14 @@ function setMicState(state, message = '', isError = false) {
     btn.className = `mic-button ${state}`;
     if (state === 'idle') {
       btn.disabled = false;
-      if (icon) { icon.style.display = 'inline'; icon.textContent = '🎙️'; }
+      if (icon) { icon.style.display = 'inline'; icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4M8 22h8"/></svg>'; }
       if (pulse) pulse.style.display = 'none';
       if (timer) timer.style.display = 'none';
       if (spinner) spinner.style.display = 'none';
       if (label) label.textContent = 'Record note';
     } else if (state === 'recording') {
       btn.disabled = false;
-      if (icon) { icon.style.display = 'inline'; icon.textContent = '⏹️'; }
+      if (icon) { icon.style.display = 'inline'; icon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12"/></svg>'; }
       if (pulse) pulse.style.display = 'inline-block';
       if (timer) { timer.style.display = 'inline'; timer.textContent = '00:00'; }
       if (spinner) spinner.style.display = 'none';
@@ -414,7 +837,7 @@ function setMicState(state, message = '', isError = false) {
       if (label) label.textContent = 'Transcribing…';
     } else if (state === 'error') {
       btn.disabled = false;
-      if (icon) { icon.style.display = 'inline'; icon.textContent = '⚠️'; }
+      if (icon) { icon.style.display = 'inline'; icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17h.01"/></svg>'; }
       if (pulse) pulse.style.display = 'none';
       if (timer) timer.style.display = 'none';
       if (spinner) spinner.style.display = 'none';
@@ -431,26 +854,16 @@ function setMicState(state, message = '', isError = false) {
 let speechRecognizer = null;
 let speechTranscript = '';
 
-async function addVoice() {
-  const input = document.getElementById('voiceFile');
-  const file = input.files && input.files[0];
-  if (!file) {
-    setStatus('noteStatus', 'Choose an audio file or record one first.', true);
-    input.focus();
-    return;
-  }
-  await uploadVoiceFile(file, 'Uploading voice note…');
-  input.value = '';
-}
-
-async function uploadVoiceFile(file, statusMessage, transcript = '') {
-  setButtonBusy('addVoiceButton', true, 'Uploading…', 'Upload audio');
+async function uploadVoiceFile(file, statusMessage, transcript = '', context = '') {
   setMicState('processing', 'Transcribing and cleaning transcript with NVIDIA NIM…');
   setStatus('noteStatus', statusMessage);
   const formData = new FormData();
   formData.append('file', file, file.name || 'voice-note.webm');
   if (transcript) {
     formData.append('transcript', transcript);
+  }
+  if (context) {
+    formData.append('context', context);
   }
   try {
     const item = await fetchJson(
@@ -468,18 +881,19 @@ async function uploadVoiceFile(file, statusMessage, transcript = '') {
       item.processing_status !== 'ready'
     );
     setMicState('idle', 'Voice note saved and transcribed.');
-    setStatus('voiceStatus', '');
+    clearComposerNote(context);
     await loadNotes();
     await loadLatestAnalysis();
     await loadDashboard();
     if (item && item.id) {
+      notifyCaptured(item.id);
       autoAnalyzeInbox(item.id);
     }
+    return true;
   } catch {
     setStatus('noteStatus', 'We could not upload that voice note.', true);
     setMicState('error', 'Voice processing failed. Please try again.', true);
-  } finally {
-    setButtonBusy('addVoiceButton', false, 'Uploading…', 'Upload audio');
+    return false;
   }
 }
 
@@ -578,7 +992,9 @@ async function toggleVoiceRecording() {
       });
       const capturedSpeech = speechTranscript;
       speechTranscript = '';
-      await uploadVoiceFile(file, 'Saving recorded voice note…', capturedSpeech);
+      // Anything typed in the note box is saved as context for the recording.
+      const typedNote = document.getElementById('noteText')?.value.trim() || '';
+      await uploadVoiceFile(file, 'Saving recorded voice note…', capturedSpeech, typedNote);
     });
 
     voiceRecorder.start(250);
@@ -614,47 +1030,6 @@ async function toggleVoiceRecording() {
   }
 }
 
-async function addUrl() {
-  const input = document.getElementById('urlText');
-  const url = input.value.trim();
-  if (!url) {
-    setStatus('noteStatus', 'Paste a URL before saving.', true);
-    input.focus();
-    return;
-  }
-  setButtonBusy('addUrlButton', true, 'Saving…', 'Save URL');
-  setStatus('noteStatus', 'Saving URL and fetching article text…');
-  try {
-    const item = await fetchJson(
-      '/api/items/url',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({url})
-      },
-      'Unable to save URL.'
-    );
-    if (input.value.trim() === url) input.value = '';
-    setStatus(
-      'noteStatus',
-      item.processing_status === 'ready'
-        ? 'URL saved and processed.'
-        : `URL saved but processing failed: ${item.error_message || 'unknown error'}`,
-      item.processing_status !== 'ready'
-    );
-    await loadNotes();
-    await loadLatestAnalysis();
-    await loadDashboard();
-    if (item && item.id) {
-      autoAnalyzeInbox(item.id);
-    }
-  } catch {
-    setStatus('noteStatus', 'We could not save that URL.', true);
-  } finally {
-    setButtonBusy('addUrlButton', false, 'Saving…', 'Save URL');
-  }
-}
-
 function esc(str) {
   return String(str ?? '').replace(/[&<>'"]/g, tag => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
@@ -678,57 +1053,82 @@ function captureTypeLabel(itemType) {
   return 'Item';
 }
 
+// Change 023: your note on a saved source can be edited; saving files it again.
+function sourceNoteButton(note) {
+  return actionButton(note.user_context ? 'Edit note' : 'Add a note', 'secondary', () => {
+    if (window.LifeInboxShell && window.LifeInboxShell.editNoteContext) window.LifeInboxShell.editNoteContext(note.id);
+  });
+}
+
 function renderNote(note) {
+  // The list shows a note's masked copy when it holds a secret (change 016);
+  // Edit still opens the real text.
+  const view = note.secret_masked ? {...note, ...note.secret_masked} : note;
   const root = document.createElement('div');
   root.className = 'note';
   root.dataset.noteId = String(note.id);
 
   const text = document.createElement('div');
   text.className = 'note-text';
-  if (note.item_type === 'url') {
-    const title = note.title || note.source_url || 'Saved URL';
-    const body = note.extracted_text || note.raw_text || '';
-    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.source_url || '')}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
-  } else if (note.item_type === 'pdf') {
-    const title = note.title || note.original_filename || 'PDF document';
-    const body = note.extracted_text || note.raw_text || '';
-    const preview = note.storage_path
-      ? `<a href="/api/items/${note.id}/file" target="_blank" rel="noopener">Open PDF</a>`
+  if (view.item_type === 'url') {
+    const title = view.title || view.source_url || 'Saved URL';
+    const body = view.extracted_text || view.raw_text || '';
+    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(view.source_url || '')}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
+  } else if (view.item_type === 'pdf') {
+    const title = view.title || view.original_filename || 'PDF document';
+    const body = view.extracted_text || view.raw_text || '';
+    const preview = view.storage_path
+      ? `<a href="/api/items/${view.id}/file" target="_blank" rel="noopener">Open PDF</a>`
       : '';
-    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(note.original_filename || '')}${preview ? ` · ${preview}` : ''}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
-  } else if (note.item_type === 'image') {
-    const title = note.title || note.original_filename || 'Image';
-    const ocr = note.extracted_text || '';
-    const ai = note.ai_description || '';
-    const thumb = note.storage_path
-      ? `<img class="capture-thumb" src="/api/items/${note.id}/file?variant=thumb" alt="Thumbnail for ${esc(title)}" />`
+    text.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${esc(view.original_filename || '')}${preview ? ` · ${preview}` : ''}</div>${body ? `<div>${esc(body.slice(0, 280))}${body.length > 280 ? '…' : ''}</div>` : ''}`;
+  } else if (view.item_type === 'image') {
+    const title = view.title || view.original_filename || 'Image';
+    const ocr = view.extracted_text || '';
+    const ai = view.ai_description || '';
+    const thumb = view.storage_path
+      ? `<img class="capture-thumb" src="/api/items/${view.id}/file?variant=thumb" alt="Thumbnail for ${esc(title)}" />`
       : '';
-    const open = note.storage_path
-      ? `<a href="/api/items/${note.id}/file" target="_blank" rel="noopener">Open image</a>`
+    const open = view.storage_path
+      ? `<a href="/api/items/${view.id}/file" target="_blank" rel="noopener">Open image</a>`
       : '';
     text.innerHTML = [
       `<strong>${esc(title)}</strong>`,
-      `<div class="muted">${esc(note.original_filename || '')}${open ? ` · ${open}` : ''}</div>`,
+      `<div class="muted">${esc(view.original_filename || '')}${open ? ` · ${open}` : ''}</div>`,
       thumb,
       `<div class="provenance"><span class="label">OCR (extracted)</span>: ${ocr ? esc(ocr.slice(0, 280)) + (ocr.length > 280 ? '…' : '') : '<em class="muted">none</em>'}</div>`,
       ai ? `<div class="provenance"><span class="label">AI description (inferred)</span>: ${esc(ai.slice(0, 320))}${ai.length > 320 ? '…' : ''}</div>` : ''
     ].join('');
-  } else if (note.item_type === 'voice') {
-    const title = note.title || note.original_filename || 'Voice note';
-    const transcript = note.extracted_text || '';
-    const cleaned = note.raw_text || '';
-    const player = note.storage_path
-      ? `<audio controls preload="none" src="/api/items/${note.id}/file"></audio>`
+  } else if (view.item_type === 'voice') {
+    const title = view.title || view.original_filename || 'Voice note';
+    const transcript = view.extracted_text || '';
+    const cleaned = view.raw_text || '';
+    const player = view.storage_path
+      ? `<audio controls preload="none" src="/api/items/${view.id}/file"></audio>`
       : '';
     text.innerHTML = [
       `<strong>${esc(title)}</strong>`,
-      `<div class="muted">${esc(note.original_filename || '')}</div>`,
+      `<div class="muted">${esc(view.original_filename || '')}</div>`,
       player,
       cleaned ? `<div class="voice-cleaned-text">${esc(cleaned)}</div>` : '',
       `<div class="provenance"><span class="label">Raw transcript</span>: ${transcript ? esc(transcript.slice(0, 320)) + (transcript.length > 320 ? '…' : '') : '<em class="muted">none yet — edit to add</em>'}</div>`
     ].join('');
   } else {
-    text.textContent = note.raw_text;
+    text.textContent = view.raw_text;
+  }
+
+  if (note.secret_masked) {
+    const hidden = document.createElement('div');
+    hidden.className = 'provenance muted';
+    hidden.textContent = 'Secret values hidden. Open the note to show them.';
+    text.append(hidden);
+  }
+
+  // The user's own note about a saved source, shown apart from source text.
+  if (view.user_context && view.item_type !== 'text') {
+    const context = document.createElement('div');
+    context.className = 'provenance user-context';
+    context.innerHTML = `<span class="label">Your note</span>: ${esc(view.user_context)}`;
+    text.prepend(context);
   }
 
   const time = document.createElement('div');
@@ -739,6 +1139,9 @@ function renderNote(note) {
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
+  if (['url', 'pdf', 'image', 'voice'].includes(note.item_type) && note.processing_status !== 'failed') {
+    actions.append(sourceNoteButton(note));
+  }
 
   if (note.item_type === 'text') {
     const editButton = actionButton('Edit', 'secondary', () => {
@@ -752,6 +1155,7 @@ function renderNote(note) {
     ['url', 'pdf', 'image', 'voice'].includes(note.item_type) &&
     note.processing_status === 'failed'
   ) {
+    actions.append(sourceNoteButton(note));
     actions.append(
       actionButton('Retry', '', async () => {
         try {
@@ -899,6 +1303,7 @@ function showEditExtractedText(note, root) {
       root.replaceWith(renderNote(updated));
       setStatus('noteStatus', isVoice ? 'Transcript updated.' : 'Extracted text updated.');
       await loadLatestAnalysis();
+      notifyEdited(note.id);
       autoAnalyzeInbox(note.id);
       await loadCalendarEvents();
     } catch {
@@ -960,6 +1365,7 @@ function showEditNote(note, root) {
       root.replaceWith(renderNote(updatedNote));
       setStatus('noteStatus', 'Note updated.');
       await loadLatestAnalysis();
+      notifyEdited(note.id);
       autoAnalyzeInbox(note.id);
       await loadCalendarEvents();
     } catch {
@@ -1036,6 +1442,7 @@ function renderTask(task) {
   const root = document.createElement('div');
   root.className = 'task';
   root.dataset.taskId = String(task.id);
+  root.dataset.priority = String(task.priority || '').toLowerCase();
 
   const text = document.createElement('strong');
   text.textContent = task.text;
@@ -1049,9 +1456,12 @@ function renderTask(task) {
 
   const meta = document.createElement('div');
   meta.className = 'task-meta';
-  const timingLabel = task.timing_text
-    ? ` · ${task.timing_text}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}`
-    : '';
+  // Where the date stands (change 012): confirmed by you, from your note's own
+  // words, or a suggestion waiting for your OK.
+  const dateStand = task.timing_confirmed && task.due_on
+    ? ' (confirmed)'
+    : task.due_on ? ' (from your note)' : task.suggested_due_on ? ' (suggested, confirm it)' : '';
+  const timingLabel = task.timing_text ? ` · ${task.timing_text}${dateStand}` : '';
   const sources = task.source_item_ids
     .map(itemId => `#${itemId}`)
     .join(', ');
@@ -1067,11 +1477,17 @@ function renderTask(task) {
       }),
       actionButton('Dismiss', 'secondary', () => {
         transitionTask(task.id, 'dismiss', actions);
-      }),
-      actionButton('Snooze 1 day', 'secondary', async () => {
+      })
+    );
+    // "Remind me tomorrow" keeps the date (change 018). A task at a set time
+    // (a meeting, an appointment) only makes sense to postpone, so it's hidden.
+    if (!task.due_time) actions.append(
+      actionButton('Remind me tomorrow', 'secondary', async () => {
+        // Tomorrow in your own time zone. A UTC date is still "yesterday" in
+        // India until 05:30, so it snoozed only until later the same day.
         const until = new Date();
-        until.setUTCDate(until.getUTCDate() + 1);
-        const iso = until.toISOString().slice(0, 10);
+        until.setDate(until.getDate() + 1);
+        const iso = toCalendarIsoDate(until);
         try {
           await fetchJson(
             `/api/tasks/${task.id}/snooze`,
@@ -1082,15 +1498,15 @@ function renderTask(task) {
             },
             'Unable to snooze task.'
           );
-          setStatus('taskStatus', `Snoozed until ${iso}.`);
+          setStatus('taskStatus', `It reminds you again tomorrow (${iso}). The date stays.`);
           await loadTasks();
           await loadAttention();
         } catch {
-          setStatus('taskStatus', 'Could not snooze task.', true);
+          setStatus('taskStatus', 'Could not set the reminder.', true);
         }
       })
     );
-    if (task.timing_text && !task.timing_confirmed) {
+    if (task.suggested_due_on && !task.timing_confirmed) {
       actions.append(
         actionButton('Confirm date', 'secondary', async () => {
           try {
@@ -1114,6 +1530,9 @@ function renderTask(task) {
         })
       );
     }
+    const dateButton = actionButton(task.due_on ? 'Postpone' : 'Set date', 'secondary', () => {});
+    dateButton.dataset.dateTask = String(task.id);
+    actions.append(dateButton);
     if (task.timing_confirmed && (task.due_on || task.timing_text)) {
       actions.append(
         actionButton('Preview calendar', 'secondary', () => {
@@ -1200,11 +1619,65 @@ async function transitionTask(taskId, action, actions) {
   }
 }
 
+
+async function createQuickTask(event) {
+  event.preventDefault();
+
+  const form = document.getElementById('quickTaskForm');
+  const textInput = document.getElementById('quickTaskText');
+  const priorityInput = document.getElementById('quickTaskPriority');
+  const dueInput = document.getElementById('quickTaskDueOn');
+  const submitButton = document.getElementById('quickTaskSubmit');
+
+  const text = textInput.value.trim();
+
+  if (!text) {
+    setStatus('taskStatus', 'Please enter a task title.', true);
+    textInput.focus();
+    return;
+  }
+
+  submitButton.disabled = true;
+  submitButton.textContent = 'Adding…';
+
+  try {
+    await fetchJson(
+      '/api/tasks',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          text,
+          priority: priorityInput.value,
+          due_on: dueInput.value || null
+        })
+      },
+      'Unable to create task.'
+    );
+
+    form.reset();
+    priorityInput.value = 'Medium';
+
+    await loadTasks();
+    await loadAttention();
+    await loadDashboard();
+
+    setStatus('taskStatus', 'Task added successfully.');
+    textInput.focus();
+  } catch {
+    setStatus('taskStatus', 'Could not add task. Please try again.', true);
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = 'Add task';
+  }
+}
+
+
 async function loadTasks() {
   const filter = document.getElementById('taskStatusFilter').value;
   try {
     const tasks = await fetchJson(
-      `/api/tasks?status=${encodeURIComponent(filter)}`,
+      withLens(`/api/tasks?status=${encodeURIComponent(filter)}`),
       undefined,
       'Unable to load tasks.'
     );
@@ -1368,6 +1841,7 @@ async function loadNotes(
   }
   params.set('limit', String(itemPagination.pageSize));
   params.set('offset', String(itemPagination.loadedOffset));
+  if (lensKey()) params.set('bot', lensKey());
   const filtered = [...params.keys()].some(
     key => key !== 'limit' && key !== 'offset' && params.get(key)
   );
@@ -1482,52 +1956,273 @@ async function loadNotes(
   }
 }
 
+// Topics are drawn by shell.js: cards grouped by life area, and a page per
+// topic with rename, move and delete (change 010). Callers still call this
+// after a change, and the shell redraws.
 async function loadTopics() {
-  try {
-    const topics = await fetchJson(
-      '/api/topics',
-      undefined,
-      'Unable to load topics.'
-    );
-    const root = document.getElementById('topics');
-    root.innerHTML = '';
-    if (!topics.length) {
-      root.innerHTML = '<div class="panel muted">No topics yet.</div>';
-      return;
-    }
-    for (const topic of topics) {
-      const row = document.createElement('div');
-      row.className = 'topic';
-      row.innerHTML = `<strong>${esc(topic.name)}</strong><div class="muted">${topic.item_count} item${topic.item_count === 1 ? '' : 's'}${topic.description ? ` · ${esc(topic.description)}` : ''}</div>`;
-      root.appendChild(row);
-    }
-  } catch {
-    setStatus('topicStatus', 'We could not load topics.', true);
+  if (window.LifeInboxShell) await window.LifeInboxShell.refreshTopics();
+}
+
+// --- Delete a user topic, after an inline "Are you sure?" -------------------
+
+function topicDeletePreview(topic, parent, subtopics) {
+  const n = topic.item_count;
+  const notes = `${n} note${n === 1 ? '' : 's'}`;
+  let text = `Delete “${topic.name}”? `;
+  if (parent) {
+    text += n ? `Its ${notes} will move to ${parent.name}.` : 'It has no notes.';
+  } else {
+    text += n ? `Its ${notes} will be re-sorted into your other topics.` : 'It has no notes.';
   }
+  if (subtopics.length) {
+    const names = subtopics.map(t => `“${t.name}”`).join(', ');
+    text += ` Its subtopic${subtopics.length === 1 ? '' : 's'} ${names} will become main topic${subtopics.length === 1 ? '' : 's'}.`;
+  }
+  return `${text} This can't be undone.`;
+}
+
+function topicDeleteSummary(result) {
+  let text = `Deleted “${result.deleted.name}”.`;
+  const moved = result.moved_notes || [];
+  if (result.moved_to_parent && moved.length) {
+    text += ` ${moved.length} note${moved.length === 1 ? '' : 's'} moved to ${result.moved_to_parent.name}.`;
+  } else if (moved.length) {
+    const counts = {};
+    for (const note of moved) counts[note.topic_name] = (counts[note.topic_name] || 0) + 1;
+    const parts = Object.entries(counts).map(([name, n]) => `${n} to ${name}`);
+    text += ` ${moved.length} note${moved.length === 1 ? '' : 's'} re-sorted: ${parts.join(', ')}.`;
+  }
+  for (const sub of result.promoted_subtopics || []) {
+    text += ` “${sub.name}” is now a main topic.`;
+  }
+  return text;
+}
+
+// --- Add topic: name + description, then an optional subtopic suggestion ---
+let pendingTopic = null;
+
+function postTopicJson(url, body) {
+  return topicRequest('POST', url, body);
+}
+
+async function topicRequest(method, url, body) {
+  const response = await fetch(url, {
+    method,
+    credentials: 'same-origin',
+    headers: body === undefined ? {} : {'Content-Type': 'application/json'},
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (response.status === 401) {
+    leaveToLogin();
+    throw new Error('Signed out.');
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === 'string' ? data.detail : 'Something went wrong. Please try again.';
+    throw new Error(detail);
+  }
+  if (String(method).toUpperCase() !== 'GET') notifyChanged();
+  return data;
+}
+
+function resetTopicForm() {
+  pendingTopic = null;
+  document.getElementById('topicSuggestion').hidden = true;
+  document.getElementById('topicForm').hidden = false;
+  document.getElementById('topicAcceptParent').hidden = false;
+  document.getElementById('topicKeepSeparate').textContent = 'Keep it as a separate topic';
+  const next = document.getElementById('topicNextButton');
+  next.disabled = false;
+  next.textContent = 'Next';
+}
+
+// The suggestion step: an optional parent topic, and the life area (change 010).
+function showTopicChoice(name, suggestion) {
+  const parent = suggestion.suggested_parent;
+  const area = document.getElementById('topicBotChoice');
+  area.value = (suggestion.suggested_bot && suggestion.suggested_bot.key) || '';
+  if (parent) {
+    document.getElementById('topicSuggestionText').textContent =
+      `“${name}” looks like part of ${parent.name}. Make it a subtopic of ${parent.name}?`;
+    document.getElementById('topicAcceptParent').textContent = `Yes, make it a subtopic of ${parent.name}`;
+    document.getElementById('topicAcceptParent').hidden = false;
+    document.getElementById('topicBotLabel').textContent = 'If it stays separate, its life area:';
+    document.getElementById('topicKeepSeparate').textContent = 'Keep it as a separate topic';
+  } else {
+    document.getElementById('topicSuggestionText').textContent =
+      `Which part of life is “${name}” about?`;
+    document.getElementById('topicAcceptParent').hidden = true;
+    document.getElementById('topicBotLabel').textContent = 'Life area';
+    document.getElementById('topicKeepSeparate').textContent = 'Create topic';
+  }
+  document.getElementById('topicSuggestionReason').textContent = suggestion.reason || '';
+  document.getElementById('topicForm').hidden = true;
+  document.getElementById('topicSuggestion').hidden = false;
+  setStatus('topicStatus', '');
+  document.getElementById(parent ? 'topicAcceptParent' : 'topicBotChoice').focus();
+}
+
+function cancelTopicSuggestion() {
+  resetTopicForm();
+  setStatus('topicStatus', 'Nothing was created.');
+  document.getElementById('topicName').focus();
 }
 
 async function createTopic(event) {
   event.preventDefault();
-  const input = document.getElementById('topicName');
-  const name = input.value.trim();
-  if (!name) return;
-  try {
-    await fetchJson(
-      '/api/topics',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name})
-      },
-      'Unable to create topic.'
-    );
-    input.value = '';
-    setStatus('topicStatus', 'Topic added.');
-    await loadTopics();
-    await loadDashboard();
-  } catch {
-    setStatus('topicStatus', 'Could not create that topic. It may already exist.', true);
+  const name = document.getElementById('topicName').value.trim();
+  const description = document.getElementById('topicDescription').value.trim();
+  if (!name) {
+    setStatus('topicStatus', 'Give the topic a name.', true);
+    return;
   }
+  if (!description) {
+    setStatus('topicStatus', 'Add a short description so Life Inbox knows which notes belong here.', true);
+    return;
+  }
+  const next = document.getElementById('topicNextButton');
+  next.disabled = true;
+  next.textContent = 'Checking…';
+  setStatus('topicStatus', 'Checking whether this fits under an existing topic…');
+  try {
+    const suggestion = await postTopicJson('/api/topics/suggest-parent', {name, description});
+    pendingTopic = {name, description, suggestion};
+    showTopicChoice(name, suggestion);
+  } catch (error) {
+    setStatus('topicStatus', error.message, true);
+    resetTopicForm();
+  }
+}
+
+async function confirmTopic(asSubtopic) {
+  if (!pendingTopic) return;
+  const {name, description, suggestion} = pendingTopic;
+  const parent = asSubtopic && suggestion.suggested_parent ? suggestion.suggested_parent : null;
+  // A subtopic always shares its parent's area; otherwise the user's pick, or
+  // none and the server's keyword rules choose.
+  const botKey = parent ? null : (document.getElementById('topicBotChoice').value || null);
+  try {
+    const created = await postTopicJson('/api/topics', {
+      name,
+      description,
+      parent_topic_id: parent ? parent.id : null,
+      bot_key: botKey
+    });
+    document.getElementById('topicName').value = '';
+    document.getElementById('topicDescription').value = '';
+    resetTopicForm();
+    const areaName = created && created.bot_key
+      ? (document.querySelector(`#topicBotChoice option[value="${created.bot_key}"]`) || {}).textContent
+      : '';
+    setStatus(
+      'topicStatus',
+      parent
+        ? `Added “${name}” as a subtopic of ${parent.name}. Re-sorting your notes…`
+        : `Added “${name}”${areaName ? ` to ${areaName}` : ''}. Re-sorting your notes…`
+    );
+    await loadTopics();
+    // Re-check only the notes whose words fit the new topic (change 014: at
+    // most 25 notes, so 0-1 AI call), then offer to undo the moves.
+    const where = parent ? ` under ${parent.name}` : (areaName ? ` to ${areaName}` : '');
+    const recheck = await fetchJson(`/api/topics/${created.id}/recheck`, {method: 'POST'}, 'Could not re-check your notes.');
+    const moved = recheck.moved || [];
+    setStatus(
+      'topicStatus',
+      moved.length
+        ? `Added “${name}”${where}. Moved ${moved.length} note${moved.length === 1 ? '' : 's'} into it.`
+        : `Added “${name}”${where}. No saved note fits it yet.`
+    );
+    if (moved.length) {
+      await loadNotes();
+      await loadTopics();
+      if (window.LifeInboxShell && window.LifeInboxShell.toast) {
+        window.LifeInboxShell.toast(`Moved ${moved.length} note${moved.length === 1 ? '' : 's'} into ${name}.`, {
+          actions: [{label: 'Undo', run: async () => {
+            await fetchJson('/api/filing/undo-moves', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({moves: moved}),
+            }, 'Could not undo.');
+            setStatus('topicStatus', `Put ${moved.length} note${moved.length === 1 ? '' : 's'} back where they were.`);
+            await loadNotes();
+            await loadTopics();
+            window.dispatchEvent(new CustomEvent('lifeinbox:changed'));
+          }}],
+        });
+      }
+      window.dispatchEvent(new CustomEvent('lifeinbox:changed'));
+    }
+  } catch (error) {
+    setStatus('topicStatus', error.message, true);
+    resetTopicForm();
+  }
+}
+
+const CHART_COLORS = ['var(--li-pop)', 'var(--li-rose)', 'var(--li-amber)', 'var(--li-primary)', 'var(--li-primary-deep)'];
+
+function renderTopicsChart(topics) {
+  const data = (topics || [])
+    .filter(t => t.item_count > 0)
+    .sort((a, b) => b.item_count - a.item_count)
+    .slice(0, 8);
+  if (!data.length) {
+    return '<p class="muted">Nothing here yet.</p>';
+  }
+  const max = Math.max(...data.map(t => t.item_count));
+  const rowH = 30;
+  const gap = 10;
+  const trackW = 220;
+  const labelW = 110;
+  const valueW = 28;
+  const labelMaxChars = 15;
+  const totalW = labelW + trackW + valueW;
+  const height = data.length * (rowH + gap) - gap;
+  const truncate = name =>
+    name.length > labelMaxChars ? `${name.slice(0, labelMaxChars - 1)}…` : name;
+  const rows = data.map((t, i) => {
+    const barW = Math.max(6, Math.round((t.item_count / max) * trackW));
+    const y = i * (rowH + gap);
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+    return `
+      <g transform="translate(0, ${y})">
+        <text x="0" y="${rowH / 2 + 4}" class="chart-label"><title>${esc(t.name)}</title>${esc(truncate(t.name))}</text>
+        <rect x="${labelW}" y="3" width="${trackW}" height="${rowH - 6}" fill="var(--li-paper-dim)" stroke="var(--li-ink)" stroke-width="2"></rect>
+        <rect x="${labelW}" y="3" width="${barW}" height="${rowH - 6}" fill="${color}" stroke="var(--li-ink)" stroke-width="2"></rect>
+        <text x="${labelW + trackW + 8}" y="${rowH / 2 + 4}" class="chart-value">${t.item_count}</text>
+      </g>
+    `;
+  }).join('');
+  const summary = data.map(t => `${t.name}: ${t.item_count}`).join(', ');
+  return `
+    <svg viewBox="0 0 ${totalW} ${height}" width="100%" height="${height}" role="img" aria-label="Bar chart of saved items per topic">
+      <title>Items per topic</title>
+      <desc>${esc(summary)}</desc>
+      ${rows}
+    </svg>
+  `;
+}
+
+// Main topics with their subtopics nested underneath; counts include subtopics.
+function renderDashboardTopics(topics) {
+  if (!topics || !topics.length) return '<p class="muted">Nothing here yet.</p>';
+  const ids = new Set(topics.map(t => t.id));
+  const children = {};
+  for (const t of topics) {
+    if (t.parent_topic_id && ids.has(t.parent_topic_id)) {
+      (children[t.parent_topic_id] ||= []).push(t);
+    }
+  }
+  const items = topics
+    .filter(t => !(t.parent_topic_id && ids.has(t.parent_topic_id)))
+    .map(t => {
+      const total = t.total_item_count ?? t.item_count;
+      const subs = (children[t.id] || [])
+        .map(c => `<li><strong>${esc(c.name)}</strong> · ${c.item_count}</li>`)
+        .join('');
+      return `<li><strong>${esc(t.name)}</strong> · ${total}${subs ? `<ul class="dashboard-subtopics">${subs}</ul>` : ''}</li>`;
+    })
+    .join('');
+  return `<ul>${items}</ul>`;
 }
 
 async function loadDashboard() {
@@ -1556,9 +2251,7 @@ async function loadDashboard() {
 
     root.innerHTML = `
       <div class="dashboard-grid">
-        ${section('Topics / Spaces', listOrEmpty(data.topics, t =>
-          `<li><strong>${esc(t.name)}</strong> · ${t.item_count}</li>`
-        ))}
+        ${section('Topics / Spaces', renderDashboardTopics(data.topics))}
         ${section('High Priority', listOrEmpty(activeHighPriority, item =>
           `<li>${esc(item.effective_title || item.raw_text || ('#' + item.id))}${item.rationale ? `<div class="why">Why: ${esc(item.rationale)}</div>` : ''}</li>`
         ))}
@@ -1571,9 +2264,10 @@ async function loadDashboard() {
         ${section('Needs Review', listOrEmpty(activeNeedsReview, item =>
           `<li>#${item.id} · ${esc(item.reason || 'Review needed')}</li>`
         ))}
-        ${section('Related Items', listOrEmpty(data.related_items, rel =>
-          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span></li>`
-        ))}
+        <div class="panel dashboard-chart">
+          <h3>Items by Topic</h3>
+          ${renderTopicsChart(data.topics)}
+        </div>
       </div>
     `;
     setStatus('dashboardStatus', 'Dashboard updated.');
@@ -1588,6 +2282,20 @@ function fillAskExample(text) {
   input.focus();
 }
 
+function askAreaName(key) {
+  const shell = window.LifeInboxShell;
+  return shell && shell.areaName ? shell.areaName(key) : key;
+}
+
+function askDay(iso) {
+  const day = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(day.getTime()) ? iso : day.toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short'});
+}
+
+function noteLinks(ids) {
+  return (ids || []).map(id => `<button type="button" class="link-btn small" data-open-note="${Number(id)}">note #${Number(id)}</button>`).join(' ');
+}
+
 function renderAskResponse(data) {
   const root = document.getElementById('askOutput');
   root.innerHTML = '';
@@ -1598,6 +2306,58 @@ function renderAskResponse(data) {
   const answer = document.createElement('div');
   answer.textContent = data.answer;
   root.append(confidence, answer);
+  // Change 019: what it remembered and your tasks, each with its notes.
+  if (data.facts && data.facts.length) {
+    const block = document.createElement('div');
+    block.className = 'citation';
+    block.innerHTML = `<h3>From what Life Inbox remembers</h3>${data.facts.map(fact =>
+      `<div>${esc(fact.text)} ${noteLinks(fact.source_item_ids)}</div>`).join('')}`;
+    root.appendChild(block);
+  }
+  if (data.tasks && data.tasks.length) {
+    const block = document.createElement('div');
+    block.className = 'citation';
+    block.innerHTML = `<h3>From your tasks</h3>${data.tasks.map(task =>
+      `<div>${esc(task.text)} · ${esc(askDay(task.day))}${task.time ? ` ${esc(task.time)}` : ''}${task.status === 'completed' ? ' · done' : task.confirmed ? '' : ' · <em>date not confirmed</em>'} ${noteLinks(task.source_item_ids)}</div>`).join('')}`;
+    root.appendChild(block);
+  }
+  if (data.suggested_actions && data.suggested_actions.length) {
+    const block = document.createElement('div');
+    block.className = 'ask-actions';
+    for (const action of data.suggested_actions) {
+      // Nothing runs until you tap it.
+      block.appendChild(actionButton(action.label, 'secondary', async () => {
+        try {
+          await fetchJson(`/api/tasks/${action.task_id}/date`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(action.due_time ? {due_on: action.due_on, due_time: action.due_time} : {due_on: action.due_on})
+          }, 'Unable to confirm the date.');
+          setStatus('askStatus', `Confirmed ${askDay(action.due_on)}.`);
+          window.dispatchEvent(new CustomEvent('lifeinbox:changed'));
+          block.querySelectorAll('button').forEach(button => { if (button.textContent === action.label) button.remove(); });
+        } catch {
+          setStatus('askStatus', 'Could not confirm the date.', true);
+        }
+      }));
+    }
+    root.appendChild(block);
+  }
+  if (data.how) {
+    const how = data.how;
+    const details = document.createElement('details');
+    details.className = 'ask-how';
+    const areas = (how.areas || []).map(askAreaName);
+    const parts = [
+      how.lens ? `Asked only ${esc(askAreaName(how.lens))} (your lens)` : areas.length ? `Asked: ${esc(areas.join(', '))}` : 'No area matched',
+      `read ${how.notes_read.length} note${how.notes_read.length === 1 ? '' : 's'}${how.notes_read.length ? ` (${how.notes_read.map(id => `#${id}`).join(', ')})` : ''}`,
+      `used ${how.memory_used} of ${how.facts_considered} remembered fact${how.facts_considered === 1 ? '' : 's'}`,
+      how.period ? `looked at ${how.tasks_read} task${how.tasks_read === 1 ? '' : 's'} for ${esc(how.period)}` : '',
+      how.ai_calls ? `${how.ai_calls} AI call${how.ai_calls === 1 ? '' : 's'}` : 'no AI call',
+    ].filter(Boolean);
+    details.innerHTML = `<summary>How I answered</summary><p class="muted small">${parts.join(' · ')}.</p>`;
+    root.appendChild(details);
+  }
   if (data.citations && data.citations.length) {
     const heading = document.createElement('h3');
     heading.textContent = 'Sources';
@@ -1627,7 +2387,8 @@ async function askInbox(event) {
       {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({question})
+        // Change 019: the lens, so only that area's notes are read.
+        body: JSON.stringify({question, bot: (window.LifeInboxShell && window.LifeInboxShell.lensKey && window.LifeInboxShell.lensKey()) || undefined})
       },
       'Unable to answer from your inbox.'
     );
@@ -1670,9 +2431,14 @@ async function loadAttention() {
     attentionRoot.replaceChildren();
     for (const [key, label] of sections) {
       const panel = document.createElement('div');
-      panel.className = 'panel';
+      panel.className = `panel attention-tile attention-tile--${key}`;
       const items = board[key] || [];
-      panel.innerHTML = `<strong>${esc(label)}</strong> <span class="muted">(${items.length})</span>`;
+      panel.innerHTML = `
+        <div class="attention-tile-head">
+          <span class="attention-tile-value">${items.length}</span>
+          <span class="attention-tile-label">${esc(label)}</span>
+        </div>
+      `;
       if (!items.length) {
         const empty = document.createElement('div');
         empty.className = 'muted';
@@ -1883,7 +2649,7 @@ async function loadCalendarEvents() {
 
   try {
     const events = await fetchJson(
-      `/api/calendar/events?start=${startIso}&end=${endIso}`,
+      withLens(`/api/calendar/events?start=${startIso}&end=${endIso}`),
       {},
       'Unable to load calendar events.'
     );
@@ -1976,7 +2742,7 @@ function renderCalendar(gridStart, gridEnd) {
 
       for (const ev of dayEvents.slice(0, 3)) {
         const dot = document.createElement('span');
-        dot.className = 'cal-dot' +
+        dot.className = `cal-dot cal-dot-${ev.bot_key || 'none'}` +
           (ev.status === 'completed' ? ' completed' : ev.needs_confirmation ? ' unconfirmed' : '');
         dotsContainer.appendChild(dot);
       }
@@ -2075,21 +2841,17 @@ function renderSelectedDayEvents() {
     return;
   }
 
-  const typeIcons = {
-    text: '📝',
-    voice: '🎙️',
-    url: '🔗',
-    pdf: '📄',
-    image: '🖼️'
-  };
-
   for (const ev of events) {
     const card = document.createElement('div');
     card.className = 'cal-event-card';
 
-    const titleEl = document.createElement('div');
+    const titleEl = document.createElement(ev.source_item_id ? 'button' : 'div');
     titleEl.className = 'cal-event-title' + (ev.status === 'completed' ? ' completed' : '');
     titleEl.textContent = ev.title;
+    if (ev.source_item_id) {
+      titleEl.type = 'button';
+      titleEl.dataset.openNote = String(ev.source_item_id);
+    }
     card.appendChild(titleEl);
 
     const metaEl = document.createElement('div');
@@ -2098,8 +2860,7 @@ function renderSelectedDayEvents() {
     // Type badge
     const typeBadge = document.createElement('span');
     typeBadge.className = 'cal-pill type';
-    const icon = typeIcons[ev.source_type] || '📝';
-    typeBadge.textContent = `${icon} ${ev.source_type}`;
+    typeBadge.textContent = ev.source_type;
     metaEl.appendChild(typeBadge);
 
     // Priority badge
@@ -2114,7 +2875,7 @@ function renderSelectedDayEvents() {
     if (ev.time_of_day) {
       const timeBadge = document.createElement('span');
       timeBadge.className = 'cal-pill time';
-      timeBadge.textContent = `⏰ ${ev.time_of_day}`;
+      timeBadge.textContent = ev.time_of_day;
       metaEl.appendChild(timeBadge);
     }
 
@@ -2130,7 +2891,7 @@ function renderSelectedDayEvents() {
     if (ev.needs_confirmation) {
       const unconfBadge = document.createElement('span');
       unconfBadge.className = 'cal-pill unconfirmed';
-      unconfBadge.textContent = `⚠️ Unconfirmed${ev.timing_text ? ` ("${ev.timing_text}")` : ''}`;
+      unconfBadge.textContent = `Unconfirmed${ev.timing_text ? ` ("${ev.timing_text}")` : ''}`;
       metaEl.appendChild(unconfBadge);
     }
 
@@ -2147,6 +2908,15 @@ function renderSelectedDayEvents() {
       jumpBtn.textContent = 'View source note';
       jumpBtn.onclick = () => jumpToSourceNote(ev.source_item_id);
       actionsEl.appendChild(jumpBtn);
+    }
+
+    if (ev.status !== 'completed') {
+      const moveBtn = document.createElement('button');
+      moveBtn.type = 'button';
+      moveBtn.className = 'secondary cal-action-btn';
+      moveBtn.textContent = 'Postpone';
+      moveBtn.dataset.dateTask = String(ev.id);
+      actionsEl.appendChild(moveBtn);
     }
 
     if (ev.needs_confirmation) {
@@ -2229,6 +2999,8 @@ async function jumpToSourceNote(itemId) {
   }
 }
 
+setupNoteLimit();
+setupComposer();
 syncControlsFromUrl();
 loadAuthUser();
 loadNotes();
@@ -2238,9 +3010,114 @@ loadTopics();
 loadDashboard();
 loadAttention();
 loadCalendarEvents();
+loadNotificationSettings();
 
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();
   loadNotes();
   loadTasks();
 });
+
+function initRailScrollSpy() {
+  const links = Array.from(document.querySelectorAll('.app-rail-link'));
+  if (!links.length) return;
+  const targets = links
+    .map(link => {
+      const id = (link.getAttribute('href') || '').replace('#', '');
+      const section = id ? document.getElementById(id) : null;
+      return section ? {link, section} : null;
+    })
+    .filter(Boolean);
+  if (!targets.length) return;
+
+  const probe = 130; // px from the top of the viewport that counts as "current"
+  let ticking = false;
+
+  const updateActive = () => {
+    ticking = false;
+    const atBottom = window.innerHeight + window.scrollY
+      >= document.documentElement.scrollHeight - 2;
+    let current = targets[0];
+    if (atBottom) {
+      // The last section may be too short to ever cross the probe line
+      // (e.g. an empty state with little content below its heading).
+      // Use getBoundingClientRect + scrollY (not offsetTop, which is
+      // relative to the nearest positioned ancestor and not comparable
+      // across sections) to find whichever section sits lowest on the page.
+      current = targets.reduce((lowest, target) => (
+        target.section.getBoundingClientRect().top > lowest.section.getBoundingClientRect().top ? target : lowest
+      ), targets[0]);
+    } else {
+      // Pick whichever section's top is closest above the probe line, by
+      // actual page position, not by the rail's icon order (which doesn't
+      // match DOM order).
+      let bestTop = -Infinity;
+      for (const target of targets) {
+        const top = target.section.getBoundingClientRect().top - probe;
+        if (top <= 0 && top > bestTop) {
+          bestTop = top;
+          current = target;
+        }
+      }
+    }
+    for (const target of targets) {
+      target.link.classList.toggle('active', target === current);
+    }
+  };
+
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(updateActive);
+  }, {passive: true});
+
+  updateActive();
+}
+
+initRailScrollSpy();
+
+function toggleAccountMenu(forceOpen) {
+  const panel = document.getElementById('accountMenuPanel');
+  const toggle = document.getElementById('accountMenuToggle');
+  if (!panel || !toggle) return;
+  const nextOpen = typeof forceOpen === 'boolean' ? forceOpen : panel.hidden;
+  panel.hidden = !nextOpen;
+  toggle.setAttribute('aria-expanded', String(nextOpen));
+}
+
+document.addEventListener('click', (event) => {
+  const menu = document.getElementById('accountMenuToggle');
+  const panel = document.getElementById('accountMenuPanel');
+  if (!menu || !panel || panel.hidden) return;
+  if (!menu.contains(event.target) && !panel.contains(event.target)) {
+    toggleAccountMenu(false);
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    toggleAccountMenu(false);
+  }
+});
+
+function resetFilePickerName(input) {
+  const nameEl = input.closest('.file-picker')?.querySelector('.file-picker-name');
+  if (!nameEl) return;
+  nameEl.textContent = 'No file chosen';
+  nameEl.classList.remove('has-file');
+}
+
+function initFilePickers() {
+  const inputs = document.querySelectorAll('.file-picker-input');
+  for (const input of inputs) {
+    const nameEl = input.closest('.file-picker')?.querySelector('.file-picker-name');
+    if (!nameEl) continue;
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      nameEl.textContent = file ? file.name : 'No file chosen';
+      nameEl.classList.toggle('has-file', Boolean(file));
+    });
+  }
+}
+
+initFilePickers();

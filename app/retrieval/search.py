@@ -66,6 +66,7 @@ def search_passages(
     item_type: Optional[str] = None,
     processing_status: Optional[str] = "ready",
     min_score: float = 0.12,
+    item_ids: Optional[set[int]] = None,
 ) -> list[RankedPassage]:
     q = query.strip()
     if not q:
@@ -75,6 +76,9 @@ def search_passages(
         item_type=item_type,
         processing_status=processing_status,
     )
+    if item_ids is not None:
+        # The lens: only this life area's notes (see GET /api/search?bot=).
+        passages = [passage for passage in passages if passage.item_id in item_ids]
     if not passages:
         return []
 

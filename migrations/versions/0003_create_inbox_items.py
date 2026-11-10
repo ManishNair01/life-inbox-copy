@@ -67,16 +67,19 @@ def _copy_legacy_notes(bind) -> None:
     if "notes" not in inspector.get_table_names():
         return
 
+    # A null-safe "differs": SQLite says IS NOT, Postgres IS DISTINCT FROM
+    # (found when deploying to Postgres, 2026-11-09).
+    differs = "IS NOT" if bind.dialect.name == "sqlite" else "IS DISTINCT FROM"
     conflicting_id = bind.execute(
         sa.text(
-            """
+            f"""
             SELECT notes.id
             FROM notes
             JOIN inbox_items ON inbox_items.id = notes.id
             WHERE inbox_items.item_type != 'text'
                OR inbox_items.raw_text != notes.text
                OR inbox_items.created_at != notes.created_at
-               OR inbox_items.updated_at IS NOT notes.updated_at
+               OR inbox_items.updated_at {differs} notes.updated_at
             LIMIT 1
             """
         )

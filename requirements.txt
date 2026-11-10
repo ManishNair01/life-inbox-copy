@@ -13,3 +13,6 @@ pypdf
 Pillow
 psycopg[binary]
 python-dotenv
+pywebpush
+pytesseract
+pypdfium2

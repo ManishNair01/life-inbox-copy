@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app import llm
 from app.capture.storage import MAX_AUDIO_BYTES
 
 logger = logging.getLogger(__name__)
@@ -166,45 +167,33 @@ def cleanup_transcript_with_llm(
     raw_transcript: str,
     *,
     api_key: str,
-    base_url: str,
     model: str,
 ) -> str:
-    """Clean raw speech transcript using NVIDIA NIM LLM.
+    """Clean raw speech transcript using the configured LLM (app/llm.py).
     Strictly preserves meaning, facts, and dates while stripping filler words and stutters.
     """
     if not raw_transcript or not raw_transcript.strip():
         return ""
     if not api_key:
         return raw_transcript
+    from app.sensitive import looks_secret
+
+    if looks_secret(raw_transcript):
+        return raw_transcript  # a secret is never sent to the AI (change 016)
 
     try:
-        from openai import OpenAI
-
-        try:
-            client = OpenAI(base_url=base_url, api_key=api_key)
-        except TypeError:
-            try:
-                client = OpenAI(api_key=api_key)
-            except TypeError:
-                client = OpenAI()
-
-        if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": STRICT_CLEANUP_SYSTEM_PROMPT},
-                    {"role": "user", "content": raw_transcript},
-                ],
-                temperature=0.1,
-            )
-            cleaned = (
-                response.choices[0].message.content
-                if response.choices and response.choices[0].message
-                else ""
-            )
-            cleaned = (cleaned or "").strip()
-            return cleaned if cleaned else raw_transcript
-        return raw_transcript
+        cleaned = llm.complete_text(
+            "voice_cleanup",
+            messages=[
+                {"role": "system", "content": STRICT_CLEANUP_SYSTEM_PROMPT},
+                {"role": "user", "content": raw_transcript},
+            ],
+            temperature=0.1,
+            model=model,
+            key=api_key,
+        )
+        cleaned = (cleaned or "").strip()
+        return cleaned if cleaned else raw_transcript
     except Exception as e:
         logger.warning(
             "NIM LLM transcript cleanup failed (%s); retaining raw transcript",
@@ -256,12 +245,9 @@ def transcribe_audio(
             "note": "Transcription disabled via LIFE_INBOX_DISABLE_TRANSCRIPTION.",
         }
 
-    api_key = (
-        os.getenv("NVIDIA_API_KEY", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
-    )
-    if api_key and not api_key.startswith("nvapi-") and not api_key.startswith("Bearer "):
-        api_key = f"nvapi-{api_key}"
+    # The "nvapi-" prefix is restored for NVIDIA keys only (app/llm.py);
+    # an OpenAI key is used exactly as given.
+    api_key = llm.api_key()
 
     if not api_key:
         key_name = (
@@ -284,41 +270,23 @@ def transcribe_audio(
             ),
         }
 
-    base_url = os.getenv(
-        "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
-    )
-
     raw_text = ""
     try:
-        from openai import OpenAI
-
-        try:
-            client = OpenAI(base_url=base_url, api_key=api_key)
-        except TypeError:
-            try:
-                client = OpenAI(api_key=api_key)
-            except TypeError:
-                client = OpenAI()
-
         model = _transcription_model()
         audio_payload, send_name, send_mime = convert_audio_to_wav(
             data, original_filename
         )
         safe_name = _normalize_filename(send_name)
-
-        if hasattr(client, "audio") and hasattr(client.audio, "transcriptions"):
-            result = client.audio.transcriptions.create(
-                model=model,
-                file=(
-                    safe_name,
-                    audio_payload,
-                    send_mime or mime_type or "application/octet-stream",
-                ),
-            )
-            if isinstance(result, str):
-                raw_text = result.strip()
-            else:
-                raw_text = str(getattr(result, "text", "") or "").strip()
+        raw_text = llm.transcribe(
+            "voice_transcribe",
+            file=(
+                safe_name,
+                audio_payload,
+                send_mime or mime_type or "application/octet-stream",
+            ),
+            model=model,
+            key=api_key,
+        )
     except Exception as e:
         logger.warning("Remote ASR transcription notice for %s: %s", original_filename, e)
 
@@ -334,36 +302,15 @@ def transcribe_audio(
             "note": _friendly_transcription_unavailable_note(),
         }
 
-    try:
-        llm_model = os.getenv(
-            "NVIDIA_LLM_MODEL", "nvidia/nemotron-3.5-bolt-e4b"
-        )
-        cleaned_text = cleanup_transcript_with_llm(
-            raw_text,
-            api_key=api_key,
-            base_url=base_url,
-            model=llm_model,
-        )
-
-        provider = "nvidia_nim" if os.getenv("NVIDIA_API_KEY") else "openai"
-        return {
-            "text": raw_text,
-            "cleaned_text": cleaned_text,
-            "provider": provider,
-            "available": True,
-            "note": None,
-        }
-    except Exception:
-        logger.exception(
-            "Voice transcription processing failed for %s", original_filename
-        )
-        return {
-            "text": raw_text,
-            "cleaned_text": raw_text,
-            "provider": "fallback",
-            "available": True,
-            "note": None,
-        }
+    # Change 014: no separate clean-up call. The filing call returns a tidied
+    # transcript (saved as AI output); the raw one stays as the note's text.
+    return {
+        "text": raw_text,
+        "cleaned_text": raw_text,
+        "provider": llm.provider(),
+        "available": True,
+        "note": None,
+    }
 
 
 def process_voice_bytes(

@@ -64,6 +64,8 @@ def load_passages(
             preview_url = item["source_url"]
 
         fields: list[tuple[str, str, str]] = []
+        if item.get("user_context"):
+            fields.append(("context", item["user_context"], "your note"))
         if item.get("raw_text"):
             fields.append(("original", item["raw_text"], "original text"))
         if item.get("extracted_text") and item.get("extracted_text") != item.get(
