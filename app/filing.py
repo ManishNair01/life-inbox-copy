@@ -658,7 +658,9 @@ def file_batch(notes: list[dict], topics: list[dict], *, compact: bool = False) 
     if not notes:
         return [], "empty_inbox"
     if not llm.is_configured():
-        return [offline_file(note, topics) for note in notes], "fallback_no_api_call"
+        # Secret notes are filed from a masked copy here too, so the saved title
+        # never holds the password (with AI off or no key).
+        return [offline_file(_masked(note) if _is_secret(note) else note, topics) for note in notes], "fallback_no_api_call"
     # A note that looks like it holds a secret never reaches the AI (change 016):
     # the offline matcher files it from a masked copy.
     secret = [note for note in notes if _is_secret(note)]

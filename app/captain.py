@@ -115,6 +115,14 @@ def _act(action: str, label: str, value=None, primary: bool = False) -> dict:
     return {"action": action, "label": label, "value": value, "primary": primary}
 
 
+def _topic_actions(choices: list[dict]) -> list[dict]:
+    """A "Which topic?" card's buttons: the likely topics, then any topic. With
+    no likely topic, "Pick a topic…" (opens the note's topic list) leads."""
+    actions = [_act("pick", choice["name"], value=choice["id"], primary=index == 0) for index, choice in enumerate(choices)]
+    other = _act("other", "Other topic…") if choices else _act("other", "Pick a topic…", primary=True)
+    return actions + [other, _act("not_now", "Not now")]
+
+
 def _words(task: dict) -> Optional[str]:
     words = (task.get("timing_text") or "").strip()
     if not words or words.lower() == (task.get("text") or "").strip().lower():
@@ -227,19 +235,18 @@ def _note_cards(facts: dict) -> list[dict]:
             choices = [by_id[choice] for choice in note.get("choices") or [] if choice in by_id][:2]
             if not choices:
                 choices = topic_choices(note["text"] or note["title"], topics, limit=2)
-            actions = [_act("pick", choice["name"], value=choice["id"], primary=index == 0) for index, choice in enumerate(choices)]
-            actions += [_act("other", "Other topic…"), _act("not_now", "Not now")]
+            actions = _topic_actions(choices)
             cards.append(_card(
                 "area", f"area:{note['id']}:pending", 300 + position, title,
-                "Life Inbox wasn't sure where this goes. Which topic fits?",
+                "Life Inbox wasn't sure where this goes. Which topic fits?" if choices
+                else "Life Inbox wasn't sure where this goes. Pick the topic that fits.",
                 actions, item_id=note["id"], data={"choices": [choice["id"] for choice in choices]},
             ))
             continue
         if note["topic_id"] is None or (note.get("topic_name") or "").lower() == CATCH_ALL_TOPIC.lower():
             choices = topic_choices(note["text"] or note["title"], topics, limit=2)
             where = "the old catch-all, Personal / Reference" if note["topic_id"] else "no topic"
-            actions = [_act("pick", choice["name"], value=choice["id"], primary=index == 0) for index, choice in enumerate(choices)]
-            actions += [_act("other", "Other topic…"), _act("not_now", "Not now")]
+            actions = _topic_actions(choices)
             cards.append(_card(
                 "area", f"area:{note['id']}:{note['topic_id'] or 'none'}", 300 + position, title,
                 f"It's in {where}. Which topic fits?" if choices else f"It's in {where}. Pick the topic that fits.",

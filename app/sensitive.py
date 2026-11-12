@@ -17,15 +17,46 @@ import re
 
 MASK = "••••"
 
-# A label, then its value ("password: hunter2", "PIN 4821", "otp is 662211").
-_LABELLED = re.compile(
-    # "PIN code" is a postal code in India; bare "pass", "token" and "secret"
-    # ("boarding pass", "token number 45", "secret santa") aren't secrets.
-    r"(?P<label>\b(?:password|passcode|passwd|pwd|pin(?!\s*code)|m-?pin|upi pin|otp|cvv|cvc|security code|"
+# "PIN code" is a postal code in India; bare "pass", "token" and "secret"
+# ("boarding pass", "token number 45", "secret santa") aren't secrets.
+_LABEL = (
+    r"\b(?:password|passcode|passwd|pwd|pin(?!\s*code)|m-?pin|upi pin|otp|cvv|cvc|security code|"
     r"wi-?fi (?:password|key|pass)|wpa key|api[_ -]?key|secret key|access token|auth token|api token|"
-    r"bearer token|recovery code|backup code)\b)(?P<sep>\s*(?:is|=|:|-)?\s*)(?P<value>(?!•)[^\s,;]{3,})",
+    r"bearer token|recovery code|backup code)\b"
+)
+# Small words are never the secret: "Password for oracle is X" hides X, not "for".
+_NOT_A_VALUE = r"(?:for|of|to|on|at|in|the|my|a|an|is|was|will|and|or|with|from)\b"
+# A label, then its value ("password: hunter2", "PIN 4821", "otp is 662211"), maybe
+# with who it's for in between ("password for oracle is X", "wifi password at home - X").
+_LABELLED = re.compile(
+    rf"(?P<label>{_LABEL})"
+    r"(?P<sep>"
+    r"\s+(?:for|of|to|on|at|in)(?:\s+[^\s,;:=•]+){1,4}?\s*(?:\s(?:is|was)\b|=|:|\s-)\s*"
+    r"|\s*(?:\b(?:is|was)\b|=|:|-)\s*"
+    # No "is" or ":": the next word counts only if it has a digit or symbol
+    # ("PIN 4821", "password hunter2"), not "password before the 15th".
+    r"|\s+(?=[^\s,;]*[\d@#$%^&*!?_+~])"
+    rf")(?P<value>(?!•)(?!{_NOT_A_VALUE})[^\s,;]{{3,}})",
     re.I,
 )
+# Safety net: in a sentence that names a secret, a password-like word (letters
+# with digits or symbols, 6+ long) is hidden even when the value isn't placed.
+_LABEL_ONLY = re.compile(_LABEL, re.I)
+_SENTENCE = re.compile(r"[^.!?\n]+[.!?\n]*")
+_PASSWORDY = re.compile(
+    r"(?<![^\s(\"'])(?=[^\s,;]*[A-Za-z])(?=[^\s,;]*[\d@#$%^&*!?+~])(?!•)[^\s,;]{6,}"
+)
+
+
+def _passwordy(text: str) -> list[re.Match]:
+    found = []
+    for sentence in _SENTENCE.finditer(text or ""):
+        if _LABEL_ONLY.search(sentence.group(0)):
+            for match in _PASSWORDY.finditer(sentence.group(0)):
+                word = match.group(0).rstrip(".!?:)\"'")
+                if len(word) >= 6:
+                    found.append((sentence.start() + match.start(), sentence.start() + match.start() + len(word)))
+    return found
 _ACCOUNT = re.compile(
     r"(?P<label>\b(?:a/?c|acct|account)(?:\s*(?:no\.?|number|#))?)(?P<sep>\s*[:\-]?\s*)(?P<value>\d{9,18})\b",
     re.I,
@@ -66,7 +97,7 @@ def looks_secret(text: str | None) -> bool:
     if not text:
         return False
     return bool(
-        _LABELLED.search(text) or _ACCOUNT.search(text) or _KEYS.search(text)
+        _LABELLED.search(text) or _passwordy(text) or _ACCOUNT.search(text) or _KEYS.search(text)
         or (_AADHAAR.search(text) and re.search(r"\baadh?aa?r\b", text, re.I))
         or _PAN.search(text) or _cards(text)
         or (_IFSC.search(text) and re.search(r"\d{9,18}", text))
@@ -78,6 +109,8 @@ def mask_secrets(text: str | None) -> str:
     if not text:
         return text or ""
     masked = _LABELLED.sub(lambda m: f"{m.group('label')}{m.group('sep')}{MASK}", text)
+    for start, end in sorted(_passwordy(masked), reverse=True):
+        masked = masked[:start] + MASK + masked[end:]
     masked = _ACCOUNT.sub(lambda m: f"{m.group('label')}{m.group('sep')}{MASK}", masked)
     masked = _KEYS.sub(MASK, masked)
     masked = _PAN.sub(MASK, masked)

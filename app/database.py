@@ -1585,9 +1585,13 @@ def complete_item_in_db(item_id: int) -> dict:
                     task.updated_at = completed_at
                     task.completed_at = completed_at
         else:
-            task_title = item.title or (
-                (item.raw_text or item.extracted_text or "Note").strip().split("\n")[0][:60]
-            )
+            # A note with no tasks is marked done by a completed marker task. Its
+            # text is masked first, so a password in the note is never stored here.
+            from app.sensitive import mask_secrets
+
+            task_title = mask_secrets(item.title or (
+                (item.raw_text or item.extracted_text or "Note").strip().split("\n")[0]
+            )).strip()[:60]
             clean_title = task_title or "Note"
             dedup_key = _task_dedup_key([item_id], clean_title)
             task = TaskRecord(

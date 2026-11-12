@@ -1750,3 +1750,27 @@ Running log of architectural, code, and operational decisions.
   - all 31 migrations and the app smoke run on a throwaway Postgres (removed afterwards);
   - browser on a throwaway server (port 8019): the calm login with live password rules, sign-up, and the team's task Edit form saving through the combined route, with no script errors.
 
+
+## 2026-11-11 — The public link now runs from the team repo
+
+- **What was asked**: after PR #2 merged into `deepsleepisgood/life-inbox-copy` main (`1f1c656`), serve the public link from the team repo instead of the private one. The owner chose to switch at once; the link was already down (the server's terminal tab had closed).
+- **Merged main checked**: its files are identical to the reviewed branch (`f782525`, empty diff); the full suite was run again on it.
+- **The live copy**: a clean clone of team main in `C:\Life_Inbox\life-inbox-live`, separate from the working clone so edits there never reach the live server. Its own `.venv`; `.env`, `data/life_inbox.db` and `data/uploads/` copied from the private folder (all git-ignored; `git status` stays clean).
+- **The database**: backed up first (`life_inbox.backup-2026-11-11-pre-team-switch.db` in the private folder, integrity ok); the copy upgraded `0030_source_summary` → `0031_merge_team_work` (adds Google identity on users and `tasks.user_edited`). 6 accounts, 42 notes and 45 tasks kept. The private folder's database is left as it was, as a fallback.
+- **Serving**: uvicorn on `127.0.0.1:8000` without `--reload` (a live server shouldn't restart on file changes); Tailscale Funnel unchanged (`/` → `http://127.0.0.1:8000`).
+- **To update the live link later**: in `life-inbox-live`, `git pull`, back up `data/life_inbox.db`, `alembic upgrade head`, restart uvicorn.
+
+## 2026-11-12 — Live link restarted
+
+- The public link was down (nothing on port 8000). Started uvicorn again in `C:\Life_Inbox\life-inbox-live` (team main, schema already at `0031_merge_team_work`), without `--reload`; `127.0.0.1:8000` and the Funnel URL both answered. It runs as a background process of the agent session, so it stops when that session ends.
+
+## 2026-11-12 — Secret notes: the right word hidden, no invented tasks, a clear topic pick
+
+- **Reported by the owner**: "My Password for oracle is Aditya@2026" showed as "My Password •••• oracle is Aditya@2026"; the note got a completed task; the "Which topic?" card had only "Other topic…" and the note page's topic list showed "Skills & projects" as if picked.
+- **Masking** (`app/sensitive.py`): the pattern took the first word after the label as the value. Now it allows "who it's for" between label and value ("password for oracle is X", "wifi password at home - X", up to 4 words, then is/was/:/=/-), never takes a small word (for, of, the, my…) as the value, and with no separator takes the next word only if it has a digit or symbol ("PIN 4821", not "password before the 15th"). Safety net: in a sentence with a secret label, a password-like word (6+ chars, letters with digits or symbols) is hidden even if the value wasn't placed. Masking happens on display, so already-saved notes show correctly after a restart.
+- **Leak found while checking**: with AI off or no key, `file_batch` filed secret notes from the unmasked text, so the saved title and the Captain card held the password. Now they're filed from a masked copy on that path too (`app/filing.py`).
+- **Mark done** (decision, owner's words: a note is just kept, it doesn't need to be done): the note page shows the button only when the note has open tasks, relabelled "Mark its tasks done"; a note with no tasks has none, so no task is invented from it. `complete_item_in_db` still makes a completed marker task for the v1 list's "Complete" button, but its text is now masked, so a password is never stored in a task.
+- **Topic pick**: with no likely topics, the Captain card leads with "Pick a topic…" (primary) and says "Pick the topic that fits." (`_topic_actions` in `app/captain.py`). The note page's list starts at a "Pick a topic…" placeholder, labelled "Put it in a topic", when the note has no topic.
+- **Tests**: masking cases (the owner's note, "for/at" phrases, no-separator, ordinary sentences), offline filing keeps no password in title or cards, Mark done stores no password (`tests/test_memory.py`); card with no likely topic (`tests/test_needs_you.py`).
+- **Browser check**: throwaway server on port 8021, fresh temp DB migrated to head, AI off: card "Pick a topic…", note page masked with no Mark done and the placeholder, picking a topic filed it and cleared the card, no task made, no console errors. Real databases not touched.
+- **Not done**: the live copy (`life-inbox-live`) still runs the old code; the owner's saved password note and its marker task are still in the live database (to delete in the app).

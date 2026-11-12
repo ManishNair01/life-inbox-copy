@@ -190,6 +190,15 @@ def test_a_note_filing_wasnt_sure_about_asks_which_topic(client):
     resolve(client, {"id": "area:999:none"}, "pick", 1, status=404)
 
 
+def test_with_no_likely_topic_the_card_leads_with_pick_a_topic(client):
+    # A note that shares no words with any topic: no guesses to offer.
+    note = file_note(client, "Zxqv plorb")
+    [card] = [c for c in cards_of(client, "area") if c["item_id"] == note["id"]]
+    assert [a["action"] for a in card["actions"]] == ["other", "not_now"]
+    assert card["actions"][0] == {"action": "other", "label": "Pick a topic…", "value": None, "primary": True}
+    assert card["text"] == "Life Inbox wasn't sure where this goes. Pick the topic that fits."
+
+
 def test_an_older_accounts_catch_all_notes_ask_which_topic(client):
     # Accounts from before change 014 still have "Personal / Reference".
     legacy = client.post("/api/topics", json={"name": "Personal / Reference", "description": "Everything else"}).json()

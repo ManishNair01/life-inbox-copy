@@ -129,6 +129,57 @@ def test_masking_keeps_the_label():
     assert mask_secrets("Wifi password: Hunter2Blue, ask Raj") == "Wifi password: ••••, ask Raj"
 
 
+@pytest.mark.parametrize("text, masked", [
+    # The value comes after who it's for: hide the value, never "for".
+    ("My Password for oracle is Aditya@2026", "My Password for oracle is ••••"),
+    ("pin for the locker is 4821", "pin for the locker is ••••"),
+    ("wifi password at home - sunrise99", "wifi password at home - ••••"),
+    ("password for my gmail account: Qw3rty!x", "password for my gmail account: ••••"),
+    ("my gmail password is abc123", "my gmail password is ••••"),
+    ("password is sunshine", "password is ••••"),
+    ("PIN 4821", "PIN ••••"),
+    # No "is": the safety net still hides the password-like word.
+    ("My Password for oracle Aditya@2026", "My Password for oracle ••••"),
+])
+def test_masking_hides_the_value_not_the_next_word(text, masked):
+    from app.sensitive import looks_secret, mask_secrets
+
+    assert looks_secret(text)
+    assert mask_secrets(text) == masked
+    assert not looks_secret(masked)
+
+
+def test_a_secret_note_filed_without_ai_never_keeps_the_password_in_its_title(client):
+    # No AI key in tests: the offline matcher files it, from a masked copy.
+    note = save(client, "My Password for oracle is Aditya@2026")
+    file(client, note)
+    insight = client.get(f"/api/items/{note['id']}/insight").json()
+    assert "Aditya@2026" not in (insight["effective_title"] or "")
+    cards = client.get("/api/captain/needs-you").json()["cards"]
+    assert all("Aditya@2026" not in json.dumps(card) for card in cards)
+
+
+def test_marking_a_secret_note_done_never_stores_the_password(client):
+    note = save(client, "My Password for oracle is Aditya@2026")
+    assert client.post(f"/api/items/{note['id']}/complete").status_code == 200
+
+    (task,) = client.get("/api/tasks?status=completed").json()
+    assert "Aditya@2026" not in task["text"]
+    assert task["text"] == "My Password for oracle is ••••"
+
+
+@pytest.mark.parametrize("text", [
+    "Change the wifi password before the 15th",
+    "Reset my password tomorrow",
+    "Ask Raj for the wifi password",
+])
+def test_talking_about_a_password_is_not_a_secret(text):
+    from app.sensitive import looks_secret, mask_secrets
+
+    assert not looks_secret(text)
+    assert mask_secrets(text) == text
+
+
 def test_a_secret_note_is_hidden_on_screen_and_never_reaches_the_ai(client, monkeypatch):
     prompts = []
     fake_ai(monkeypatch, lambda note: entry(note["id"], "Home & errands", "money"), prompts)

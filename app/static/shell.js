@@ -2379,6 +2379,7 @@
     const revealed = secret && state.revealed.has(id);
     const view = revealed ? item : L.shown(item);
     const ownTasks = tasks.filter(task => (task.source_item_ids || []).includes(id));
+    const openTasks = ownTasks.filter(task => task.status === 'open');
     const dates = ownTasks.filter(task => task.due_on).map(task => task.due_on).sort();
     const priority = insight ? insight.effective_priority : null;
     const movedByYou = Boolean(insight && insight.user_topic_id && insight.user_topic_id !== insight.topic_id);
@@ -2464,9 +2465,9 @@
         ? related.map(other => `<button type="button" class="row-link block" data-open-note="${other.id}">${escapeHtml(itemTitle(other))}</button>`).join('')
         : '<p class="muted">Nothing related yet.</p>'}</section>
       <div class="sheet-actions">
-        <button type="button" id="noteMarkDone">Mark done</button>
-        <label class="move-topic">Move to topic
-          <select id="noteMoveTopic"${insight ? '' : ' disabled'}>${topicOptions(topicId)}</select>
+        ${openTasks.length ? `<button type="button" id="noteMarkDone">Mark its tasks done</button>` : ''}
+        <label class="move-topic">${topicId ? 'Move to topic' : 'Put it in a topic'}
+          <select id="noteMoveTopic"${insight ? '' : ' disabled'}>${topicId ? '' : '<option value="" selected disabled>Pick a topic…</option>'}${topicOptions(topicId)}</select>
         </label>
         <button type="button" class="secondary" id="noteShowInList">Show in All notes</button>
       </div>
@@ -2476,7 +2477,8 @@
     if (typeof renderTask === 'function') {
       for (const task of ownTasks) taskRoot.appendChild(renderTask(task));
     }
-    $('noteMarkDone').addEventListener('click', () => markDone(id));
+    // A note is just kept; only a note with open tasks can be "done" (its tasks).
+    if (openTasks.length) $('noteMarkDone').addEventListener('click', () => markDone(id));
     $('noteMoveTopic').addEventListener('change', event => moveToTopic(id, Number(event.target.value)));
     $('noteShowInList').addEventListener('click', () => showInAllNotes(id));
     if (!keepFocus) body.closest('.sheet-panel').querySelector('.sheet-close').focus();
